@@ -1,0 +1,1277 @@
+// ==UserScript==
+// @name         GHL Conversation Context Extractor
+// @namespace    https://drjonesdc.com/
+// @version      1.8.5
+// @author       Jeyson Dagondon
+// @run-at       document-idle
+// @description  One-click GHL conversation extractor (SMS/calls/transcripts/emails) to XML/JSON
+// @match        https://app.gohighlevel.com/*
+// @match        https://*.gohighlevel.com/*
+// @match        https://*.leadconnectorhq.com/*
+// @match        https://*.msgsndr.com/*
+// @grant        GM_setClipboard
+// @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
+// ==/UserScript==
+// Part of the userscript-showcase collection — generated from the private working
+// repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
+
+console.info('[GHL-Ctx v1.8.5] boot');
+  const __dsStyle = document.createElement('style');
+  __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
+  document.documentElement.appendChild(__dsStyle);
+
+(function () {
+    'use strict';
+
+    // ─── CONFIG ───────────────────────────────────────────────────────────────────
+
+    const DEFAULT_CONFIG = {
+        format: 'json',   // 'xml' or 'json'
+        action: 'download',  // 'copy' or 'download'
+        files: 'download'    // 'skip' or 'download'
+    };
+
+    const CONFIG = {
+        format: GM_getValue('ghl_format', DEFAULT_CONFIG.format),
+        action: GM_getValue('ghl_action', DEFAULT_CONFIG.action),
+        files: GM_getValue('ghl_files', DEFAULT_CONFIG.files)
+    };
+
+    function updateConfig(key, value) {
+        CONFIG[key] = value;
+        GM_setValue(`ghl_${key}`, value);
+    }
+
+    // v1.4.0 speed pass constants.
+    // TRANSCRIPT_TIMEOUT_MS: 9000ms is enough for even long calls to stabilize.
+    //   14000ms was overkill and caused unnecessary wait times on fast connections.
+    // TRANSCRIPT_FIRST_TRY_MS: 5000ms allows enough clicks to force expansion before
+    //   falling back to the polling loop.
+    const TRANSCRIPT_TIMEOUT_MS   = 9000;
+    const TRANSCRIPT_FIRST_TRY_MS = 5000;
+
+    // LOAD PHASE (data-index driven).
+    // LOAD_POLL_MS: 369ms is a "prime-ish" number to avoid locking into sync cycles
+    //   with GHL's own internal render timers (often 100/200/500ms).
+    // LOAD_FETCH_WAIT_MS: 1000ms gives the network request time to return and the DOM
+    //   to update before we declare the round "no growth".
+    // LOAD_NO_GROWTH_ROUNDS: 10 consecutive empty rounds ensures we don't stop prematurely
+    //   if a batch is just slow to render.
+    const LOAD_POLL_MS         = 369;
+    const LOAD_FETCH_WAIT_MS   = 1000;
+    const LOAD_NO_GROWTH_ROUNDS = 10;
+    const LOAD_MAX_ROUNDS      = 420;
+
+    // DOCUMENTS PANEL (file download) constants.
+    // DOC_PANEL_MAX_WAIT_MS: how long we'll wait for the panel to render rows
+    //   after clicking the sidebar icon.
+    // DOC_MENU_WAIT_MS: how long we give the kebab dropdown to open before we
+    //   search for its "Download" item.
+    // DOC_ROW_GAP_MS: pause after a successful download click before moving to
+    //   the next row, so the browser's download isn't clobbered mid-flight.
+    const DOC_PANEL_MAX_WAIT_MS = 4000;
+    const DOC_PANEL_POLL_MS     = 250;
+    const DOC_MENU_WAIT_MS      = 400;
+    const DOC_ROW_GAP_MS        = 700;
+
+
+    // ─── STYLES ───────────────────────────────────────────────────────────────────
+
+    GM_addStyle(`
+        #gx-extractor-container {
+            position: fixed;
+            top: 120px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            z-index: 99999;
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+        }
+        #gx-extractor-container.gx-dragging { cursor: grabbing; }
+
+        /* Simple, flat button */
+        #gx-extractor-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 22px;
+            border-radius: 10px;
+            background: #1b2a4a;
+            color: #fff;
+            border: 1px solid #2a4070;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            white-space: nowrap;
+            user-select: none;
+        }
+        #gx-extractor-toggle:hover { background: #2a4070; }
+        #gx-extractor-toggle:active { background: var(--ds-surface2,#16223c); }
+
+        /* While running it becomes a red Stop button */
+        #gx-extractor-toggle.gx-working {
+            background: var(--ds-danger,#b33030);
+            border-color: var(--ds-danger,#8b1a1a);
+        }
+        #gx-extractor-toggle.gx-working:hover { background: #c0392b; }
+
+        /* Settings Menu — fixed, but repositioned on open so it never leaves the viewport */
+        #gx-settings-menu {
+            position: fixed;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            color: #333;
+            min-width: 180px;
+            z-index: 100000;
+            opacity: 0;
+            transform: translateY(4px);
+            transition: opacity 0.15s ease, transform 0.15s ease;
+            pointer-events: none;
+        }
+        #gx-settings-menu.visible {
+            display: flex;
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        .gx-menu-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            padding: 6px 8px;
+            border-radius: 4px;
+        }
+        .gx-menu-item:hover { background: var(--ds-surface2,#f0f0f0); }
+        .gx-menu-label { font-weight: 500; }
+        .gx-menu-value { color: #666; font-size: 12px; }
+
+        #gx-toast {
+            position: absolute;
+            bottom: calc(100% + 8px);
+            right: 0;
+            z-index: 100001;
+            background: #1b2a4a;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            opacity: 0;
+            transform: translateY(8px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+            white-space: pre-line;
+            max-width: 70vw;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #gx-toast.gx-show { opacity: 1; transform: translateY(0); }
+        #gx-toast.gx-error { background: var(--ds-danger,#8b1a1a); }
+        #gx-toast.gx-success { background: var(--ds-success,#0e6b46); }
+    `);
+
+    // ─── UI SETUP ─────────────────────────────────────────────────────────────────
+
+    const container = document.createElement('div');
+    container.id = 'gx-extractor-container';
+
+    const toggle = document.createElement('button');
+    toggle.id = 'gx-extractor-toggle';
+    toggle.innerHTML = '<span class="gx-toggle-emoji">📋</span><span class="gx-toggle-label">Extract</span>';
+    toggle.title = 'Extract conversation context (Drag to move · Right-click for options)';
+    container.appendChild(toggle);
+
+    // Settings Menu
+    const settingsMenu = document.createElement('div');
+    settingsMenu.id = 'gx-settings-menu';
+
+    // Format Selector
+    const formatItem = document.createElement('div');
+    formatItem.className = 'gx-menu-item';
+    formatItem.innerHTML = `
+        <span class="gx-menu-label">Format</span>
+        <span class="gx-menu-value" id="gx-display-format">${CONFIG.format.toUpperCase()}</span>
+    `;
+    formatItem.onclick = () => {
+        const newFormat = CONFIG.format === 'xml' ? 'json' : 'xml';
+        updateConfig('format', newFormat);
+        document.getElementById('gx-display-format').textContent = newFormat.toUpperCase();
+        closeMenu();
+    };
+    settingsMenu.appendChild(formatItem);
+
+    // Action Selector
+    const actionItem = document.createElement('div');
+    actionItem.className = 'gx-menu-item';
+    actionItem.innerHTML = `
+        <span class="gx-menu-label">Action</span>
+        <span class="gx-menu-value" id="gx-display-action">${CONFIG.action.charAt(0).toUpperCase() + CONFIG.action.slice(1)}</span>
+    `;
+    actionItem.onclick = () => {
+        const newAction = CONFIG.action === 'copy' ? 'download' : 'copy';
+        updateConfig('action', newAction);
+        document.getElementById('gx-display-action').textContent = newAction.charAt(0).toUpperCase() + newAction.slice(1);
+        closeMenu();
+    };
+    settingsMenu.appendChild(actionItem);
+
+    // Files Selector
+    const filesItem = document.createElement('div');
+    filesItem.className = 'gx-menu-item';
+    filesItem.innerHTML = `
+        <span class="gx-menu-label">Files</span>
+        <span class="gx-menu-value" id="gx-display-files">${CONFIG.files === 'download' ? 'Download' : 'Skip'}</span>
+    `;
+    filesItem.onclick = () => {
+        const newFiles = CONFIG.files === 'download' ? 'skip' : 'download';
+        updateConfig('files', newFiles);
+        document.getElementById('gx-display-files').textContent = newFiles === 'download' ? 'Download' : 'Skip';
+        closeMenu();
+    };
+    settingsMenu.appendChild(filesItem);
+
+    container.appendChild(settingsMenu);
+
+    const toast = document.createElement('div');
+    toast.id = 'gx-toast';
+    container.appendChild(toast);
+
+    let toastTimer = null;
+    let menuTimeout = null;
+    let shouldStop = false;
+
+    // Keep the toast fully on-screen even when the button sits near the left edge.
+    function clampToastToViewport() {
+        const cRect = container.getBoundingClientRect();
+        const tRect = toast.getBoundingClientRect();
+        if (tRect.left < 8) {
+            toast.style.right = 'auto';
+            toast.style.left = Math.max(4, 8 - cRect.left) + 'px';
+        } else {
+            toast.style.left = 'auto';
+            toast.style.right = '0';
+        }
+    }
+
+    function showToast(msg, type = 'success', duration = 5000) {
+        toast.textContent = msg;
+        toast.className = `gx-show gx-${type}`;
+        clampToastToViewport();
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toast.className = ''; }, duration);
+    }
+
+    // ── FLOATING, DRAGGABLE PLACEMENT (remembers last position) ──
+    function savePosition() {
+        const r = container.getBoundingClientRect();
+        GM_setValue('ghl_pos', JSON.stringify({ left: r.left, top: r.top }));
+    }
+
+    function restorePosition() {
+        const raw = GM_getValue('ghl_pos', null);
+        if (!raw) return false;
+        try {
+            const pos = JSON.parse(raw);
+            if (typeof pos.left === 'number' && typeof pos.top === 'number') {
+                // Clamp back inside the viewport in case the window got smaller
+                const w = container.offsetWidth || 160;
+                const h = container.offsetHeight || 50;
+                const left = Math.min(Math.max(4, pos.left), window.innerWidth - w - 4);
+                const top  = Math.min(Math.max(4, pos.top),  window.innerHeight - h - 4);
+                container.style.left = left + 'px';
+                container.style.top = top + 'px';
+                container.style.right = 'auto';
+                container.style.bottom = 'auto';
+                return true;
+            }
+        } catch (e) { /* ignore a bad stored value */ }
+        return false;
+    }
+
+    function mountFloating() {
+        if (!container.isConnected) {
+            document.body.appendChild(container);
+            if (!restorePosition()) {
+                container.style.right = '20px';
+                container.style.top = '120px';
+            }
+        }
+    }
+    mountFloating();
+
+    // Drag-to-move. Uses pointer events; right-click is left untouched so the
+    // settings menu still opens. A click that ends a drag won't start extraction.
+    let dragState = null;
+    let lastDragMoved = false;
+
+    function startDrag(e) {
+        if (e.button !== 0) return;   // only drag with the primary button
+        lastDragMoved = false;
+        const r = container.getBoundingClientRect();
+        dragState = {
+            pointerId: e.pointerId,
+            offsetX: e.clientX - r.left,
+            offsetY: e.clientY - r.top,
+            startX: e.clientX,
+            startY: e.clientY,
+            moved: false
+        };
+        container.classList.add('gx-dragging');
+        if (toggle.setPointerCapture) toggle.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    }
+
+    function onDragMove(e) {
+        if (!dragState || dragState.pointerId !== e.pointerId) return;
+        if (Math.abs(e.clientX - dragState.startX) + Math.abs(e.clientY - dragState.startY) > 4) {
+            dragState.moved = true;
+        }
+        let left = e.clientX - dragState.offsetX;
+        let top = e.clientY - dragState.offsetY;
+
+        // Keep the button fully inside the viewport while dragging
+        const r = container.getBoundingClientRect();
+        left = Math.min(Math.max(4, left), window.innerWidth - r.width - 4);
+        top  = Math.min(Math.max(4, top),  window.innerHeight - r.height - 4);
+
+        container.style.left = left + 'px';
+        container.style.top = top + 'px';
+        container.style.right = 'auto';
+        container.style.bottom = 'auto';
+
+        // Keep the toast glued to the button as it's dragged
+        if (toast.classList.contains('gx-show')) clampToastToViewport();
+    }
+
+    function endDrag(e) {
+        if (!dragState || dragState.pointerId !== e.pointerId) return;
+        container.classList.remove('gx-dragging');
+        if (toggle.hasPointerCapture && toggle.hasPointerCapture(e.pointerId)) {
+            toggle.releasePointerCapture(e.pointerId);
+        }
+        if (dragState.moved) savePosition();
+        lastDragMoved = dragState.moved;
+        dragState = null;
+    }
+
+    toggle.addEventListener('pointerdown', startDrag);
+    toggle.addEventListener('pointermove', onDragMove);
+    toggle.addEventListener('pointerup', endDrag);
+    toggle.addEventListener('pointercancel', endDrag);
+
+    // ── SETTINGS MENU POSITIONING (never leaves the viewport) ──
+    function positionSettingsMenu() {
+        const r = toggle.getBoundingClientRect();
+        const mw = settingsMenu.offsetWidth || 180;
+        const mh = settingsMenu.offsetHeight || 132;
+        const pad = 8;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        // Open below the button by default; flip above when it would overflow the bottom
+        let top = r.bottom + 6;
+        let bottom = 'auto';
+        if (top + mh > vh - pad) {
+            top = 'auto';
+            bottom = (vh - r.top) + 6;
+        }
+
+        // Keep it horizontally inside the viewport
+        let left = r.left;
+        if (left + mw > vw - pad) left = Math.max(pad, vw - mw - pad);
+
+        settingsMenu.style.top = (top === 'auto' ? 'auto' : top + 'px');
+        settingsMenu.style.bottom = (bottom === 'auto' ? 'auto' : bottom + 'px');
+        settingsMenu.style.left = left + 'px';
+        settingsMenu.style.right = 'auto';
+    }
+
+    function showMenu() {
+        settingsMenu.classList.add('visible');
+        positionSettingsMenu();
+        clearTimeout(menuTimeout);
+    }
+
+    function closeMenu() {
+        settingsMenu.classList.remove('visible');
+    }
+
+    window.addEventListener('resize', () => {
+        if (settingsMenu.classList.contains('visible')) positionSettingsMenu();
+        if (toast.classList.contains('gx-show')) clampToastToViewport();
+    });
+
+    // Request the current extraction to stop at the next checkpoint.
+    function stopExtraction() {
+        shouldStop = true;
+        toggle.innerHTML = '<span class="gx-toggle-emoji">⏹</span><span class="gx-toggle-label">Stopping…</span>';
+        toggle.title = 'Stopping extraction…';
+        showToast('Stopping… (finishing current step)', 'error', 3000);
+    }
+
+    // Toggle Logic — click starts extraction, or stops it while running.
+    // A click that ends a drag is ignored.
+    toggle.addEventListener('click', () => {
+        if (lastDragMoved) {
+            lastDragMoved = false;
+            return;
+        }
+        if (settingsMenu.classList.contains('visible')) {
+            closeMenu();
+        } else if (isRunning) {
+            stopExtraction();
+        } else {
+            runExtraction();
+        }
+    });
+
+    // Right click to open menu
+    toggle.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showMenu();
+        menuTimeout = setTimeout(closeMenu, 4000);
+    });
+
+    // Close menu if clicking outside
+    document.addEventListener('click', (e) => {
+        if (!container.contains(e.target)) closeMenu();
+    });
+
+    // ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function escapeXml(str) {
+        if (str == null) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+    }
+
+    function clean(str) {
+        return (str || '').replace(/\s+/g, ' ').trim();
+    }
+
+    // The scrollable column that holds the messages.
+    function getScrollContainer() {
+        const anyMsg = document.querySelector('.message-item[data-message-id]');
+        if (!anyMsg) return null;
+
+        const candidates = [];
+        let el = anyMsg.parentElement;
+        while (el && el !== document.body) {
+            const oy = getComputedStyle(el).overflowY;
+            if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
+                candidates.push(el);
+            }
+            el = el.parentElement;
+        }
+        if (candidates.length === 0) return null;
+        candidates.sort((a, b) =>
+            (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+        );
+        return candidates[0];
+    }
+
+    function isLoadingMore(sc) {
+        const scope = sc || document;
+        return !!scope.querySelector(
+            '.loading, .spinner, [class*="loading" i], [class*="skeleton" i], ' +
+            '[role="progressbar"], svg.animate-spin, .animate-spin'
+        );
+    }
+
+    // ─── VIRTUALIZER INDEX HELPERS ───────────────────────────────────────────────────
+
+    function indexOfNode(node) {
+        const wrap = node.closest('[data-index]');
+        const v = wrap ? +wrap.dataset.index : NaN;
+        return isNaN(v) ? Infinity : v;
+    }
+
+    function minDataIndex() {
+        let min = Infinity;
+        document.querySelectorAll('[data-index]').forEach(n => {
+            const v = +n.dataset.index;
+            if (!isNaN(v) && v < min) min = v;
+        });
+        return min === Infinity ? null : min;
+    }
+
+    // ─── TRANSCRIPT LOADING ──────────────────────────────────────────────────────────
+
+    function findFullTranscriptExpander(item) {
+        const btn = item.querySelector('button[id^="toggle-transcript-btn-"]');
+        const scopes = [
+            btn && btn.closest('.recording-item'),
+            btn && btn.closest('.chat-message'),
+            btn && btn.closest('.chat-content'),
+            btn && btn.closest('.message-item'),
+            item
+        ].filter(Boolean);
+
+        for (const scope of scopes) {
+            const hit = [...scope.querySelectorAll('div.cursor-pointer, span, button, a')]
+                .find(el => el.offsetParent !== null &&
+                            clean(el.textContent).toLowerCase() === 'full transcript');
+            if (hit) return hit.closest('div.cursor-pointer') || hit;
+        }
+        const any = [...document.querySelectorAll('div.cursor-pointer, span, button, a')]
+            .find(el => el.offsetParent !== null &&
+                        clean(el.textContent).toLowerCase() === 'full transcript');
+        return any ? (any.closest('div.cursor-pointer') || any) : null;
+    }
+
+    async function openPreview(item) {
+        const btn = item.querySelector('button[id^="toggle-transcript-btn-"]');
+        if (!btn || btn.offsetParent === null) return;
+        const t = (btn.textContent || '').toLowerCase();
+        if (t.includes('view') || t.includes('show')) {
+            btn.click();
+            await sleep(250);
+        }
+    }
+
+    async function loadOneTranscript(item) {
+        const start = Date.now();
+        const lineCount = () => extractTranscriptLines(item).length;
+
+        await openPreview(item);
+
+        let beforeFull = lineCount();
+        let expanderClicks = 0;
+        while (Date.now() - start < TRANSCRIPT_FIRST_TRY_MS && !shouldStop) {
+            const expander = findFullTranscriptExpander(item);
+            if (!expander) break;
+            expander.click();
+            expanderClicks++;
+            await sleep(350);
+            if (lineCount() > beforeFull) break;
+            if (expanderClicks >= 6) break;
+        }
+
+        let last = -1, stable = 0;
+        while (Date.now() - start < TRANSCRIPT_TIMEOUT_MS && !shouldStop) {
+            const n = lineCount();
+            if (n === last && n > 0) {
+                stable++;
+                if (stable >= 2) break;
+            } else {
+                stable = 0;
+                last = n;
+            }
+            if (n > 0 && n <= 5) {
+                const expander = findFullTranscriptExpander(item);
+                if (expander) { expander.click(); await sleep(300); }
+            }
+            await sleep(200);
+        }
+
+        return lineCount();
+    }
+
+    async function expandAndLoadVisibleTranscripts() {
+        const visibleCalls = [...document.querySelectorAll('.message-item[data-message-id]')]
+            .filter(n => n.querySelector('button[id^="toggle-transcript-btn-"]'));
+
+        if (visibleCalls.length === 0 || shouldStop) return 0;
+
+        await Promise.all(visibleCalls.map(c => loadOneTranscript(c)));
+        return visibleCalls.length;
+    }
+
+    // ─── HARVEST-AS-YOU-SCROLL ──────────────────────────────────────────────
+
+    function transcriptLineCount(data) {
+        if (data && data.type === 'call' && data.fields && data.fields.transcript) {
+            return data.fields.transcript.length;
+        }
+        return 0;
+    }
+
+    async function loadEntireHistory(sc, onProgress) {
+        const messageCount = () =>
+            document.querySelectorAll('.message-item[data-message-id]').length;
+
+        let rounds = 0;
+        let noGrowth = 0;
+        let lastMin = minDataIndex();
+        if (lastMin == null) lastMin = Infinity;
+
+        while (rounds < LOAD_MAX_ROUNDS) {
+            if (shouldStop) break;
+            sc.scrollTop = 0;
+            await sleep(80);
+            sc.scrollTop = 1;
+            await sleep(80);
+            sc.scrollTop = 0;
+
+            const waitStart = Date.now();
+            let grew = false;
+            while (Date.now() - waitStart < LOAD_FETCH_WAIT_MS && !shouldStop) {
+                const cur = minDataIndex();
+                if (cur != null && cur < lastMin) {
+                    lastMin = cur;
+                    grew = true;
+                    break;
+                }
+                await sleep(LOAD_POLL_MS);
+            }
+
+            sc.scrollTop = 0;
+
+            if (grew) {
+                noGrowth = 0;
+            } else if (!isLoadingMore(sc)) {
+                noGrowth++;
+            }
+
+            rounds++;
+            if (onProgress) onProgress(messageCount(), rounds);
+
+            const flooredAndIdle = (lastMin === 0) && !isLoadingMore(sc);
+            if (noGrowth >= LOAD_NO_GROWTH_ROUNDS && (flooredAndIdle || noGrowth >= LOAD_NO_GROWTH_ROUNDS + 2)) {
+                break;
+            }
+        }
+
+        return { rounds, finalCount: messageCount() };
+    }
+
+    async function harvestWholeThread() {
+        const sc = getScrollContainer();
+        if (!sc) return { container: false, messages: 0, entries: [], transcriptsOpened: 0 };
+
+        const messages = new Map();
+        const dateChips = new Map();
+        let transcriptsOpened = 0;
+
+        const harvestVisible = () => {
+            document.querySelectorAll('[id^="date-label-"]').forEach(chip => {
+                const idx = indexOfNode(chip);
+                const wrap = chip.querySelector('.hr-tag__count-wrapper');
+                const txt = clean(wrap ? wrap.textContent : chip.textContent);
+                if (txt && idx !== Infinity) dateChips.set(idx, txt);
+            });
+
+            document.querySelectorAll('.message-item[data-message-id]').forEach(node => {
+                const id = node.getAttribute('data-message-id');
+                if (!id) return;
+                const data = classifyAndExtract(node);
+                if (!data) return;
+
+                const existing = messages.get(id);
+
+                if (!existing) {
+                    messages.set(id, { idx: indexOfNode(node), data });
+                    return;
+                }
+
+                if (transcriptLineCount(data) > transcriptLineCount(existing.data)) {
+                    messages.set(id, { idx: existing.idx, data });
+                }
+            });
+        };
+
+        const settleAndHarvest = async () => {
+            if (shouldStop) return;
+            if (isLoadingMore(sc)) await sleep(200);
+            if (shouldStop) return;
+            transcriptsOpened += await expandAndLoadVisibleTranscripts();
+            harvestVisible();
+        };
+
+        // ── STEP 1: LOAD PHASE ──
+        if (typeof harvestWholeThread._onLoadProgress === 'function') {
+            await loadEntireHistory(sc, harvestWholeThread._onLoadProgress);
+        } else {
+            await loadEntireHistory(sc);
+        }
+
+        await sleep(300);
+        await settleAndHarvest();
+
+        // ── STEP 2: HARVEST PHASE ──
+        const step = Math.max(240, Math.floor(sc.clientHeight * 0.8));
+        let pos = 0, guard = 0, lastHeight = -1, stableHeight = 0;
+        const MAX_STEPS = 600;
+
+        while (guard < MAX_STEPS) {
+            if (shouldStop) break;
+            pos += step;
+            if (pos > sc.scrollHeight) pos = sc.scrollHeight;
+            sc.scrollTop = pos;
+            await sleep(150);
+            await settleAndHarvest();
+
+            const atBottom = (sc.scrollTop + sc.clientHeight) >= (sc.scrollHeight - 4);
+            const h = sc.scrollHeight;
+            if (h === lastHeight) stableHeight++; else { stableHeight = 0; lastHeight = h; }
+            if (atBottom && stableHeight >= 2) break;
+            guard++;
+        }
+
+        harvestVisible();
+
+        sc.scrollTop = 0; await sleep(200);
+        sc.scrollTop = sc.scrollHeight; await sleep(150);
+
+        const chipList = [...dateChips.entries()]
+            .map(([idx, date]) => ({ idx, date }))
+            .sort((a, b) => a.idx - b.idx);
+
+        const dateFor = (idx) => {
+            let d = '';
+            for (const c of chipList) { if (c.idx <= idx) d = c.date; else break; }
+            return d;
+        };
+
+        const entries = [...messages.values()]
+            .sort((a, b) => a.idx - b.idx)
+            .map(m => ({ data: m.data, date: dateFor(m.idx) }));
+
+        return { container: true, messages: entries.length, entries, transcriptsOpened };
+    }
+
+    function extractTranscriptLines(item) {
+        const btn = item.querySelector('button[id^="toggle-transcript-btn-"]');
+        if (!btn) return [];
+
+        const m = btn.id.match(/^toggle-transcript-btn-(.+)$/);
+        const key = m ? m[1] : null;
+
+        const lines = [];
+        const seen = new Set();
+        const push = (time, text) => {
+            if (!text) return;
+            const sig = time + '|' + text;
+            if (seen.has(sig)) return;
+            seen.add(sig);
+            lines.push({ time, text });
+        };
+
+        const readRow = (node) => {
+            const spans = node.querySelectorAll(':scope > span');
+            if (spans.length >= 2) {
+                push(clean(spans[0].textContent), clean(spans[1].textContent));
+            } else {
+                const all = node.querySelectorAll('span');
+                if (all.length >= 2) {
+                    push(clean(all[0].textContent), clean(all[1].textContent));
+                } else {
+                    push('', clean(node.textContent));
+                }
+            }
+        };
+
+        if (key) {
+            document
+                .querySelectorAll(`[id^="conv-transcript-line-${CSS.escape(key)}-"]`)
+                .forEach(readRow);
+        }
+
+        if (lines.length === 0) {
+            const scopes = [
+                btn.closest('.recording-item'),
+                btn.closest('.chat-message'),
+                btn.closest('.chat-content'),
+                btn.closest('.message-item'),
+                item
+            ].filter(Boolean);
+
+            for (const scope of scopes) {
+                const rows = [...scope.querySelectorAll('div.flex.items-baseline.gap-1')]
+                    .filter(n => {
+                        const first = n.querySelector(':scope > span');
+                        return first && /^\d{1,2}:\d{2}$/.test(clean(first.textContent));
+                    });
+                if (rows.length) {
+                    rows.forEach(readRow);
+                    break;
+                }
+            }
+        }
+
+        return lines;
+    }
+
+    function getDirection(item) {
+        if (item.querySelector('.message-container.ml-auto, .chat-bubble-outbound')) return 'outbound';
+        if (item.querySelector('.message-container.mr-auto, .chat-bubble-inbound')) return 'inbound';
+        return '';
+    }
+
+    function getSenderInitials(item) {
+        const av = item.querySelector('.hr-avatar__text p, .hr-avatar__text');
+        if (av) {
+            const t = clean(av.textContent);
+            if (t && t.length <= 4) return t;
+        }
+        return '';
+    }
+
+    function getTimestamp(item) {
+        const t = item.querySelector('.text-gray-600.text-\\[12px\\] .cursor-pointer, span.cursor-pointer');
+        if (t) {
+            const txt = clean(t.textContent);
+            if (/\d{1,2}:\d{2}/.test(txt)) return txt;
+        }
+        const d = item.querySelector('.text-gray-500.text-\\[13px\\]');
+        if (d) return clean(d.textContent);
+        return '';
+    }
+
+    function classifyAndExtract(item) {
+        const systemPill = item.querySelector('.justify-center .text-ellipsis, .justify-center.w-full');
+        const hasBubble = item.querySelector('.chat-bubble-inbound, .chat-bubble-outbound');
+
+        // Check for call indicators early to set the button flag
+        const transcriptBtn = item.querySelector('button[id^="toggle-transcript-btn-"]');
+        const isCallCard = item.querySelector('.audio-player, button[id^="toggle-transcript-btn-"], [id^="avatar-call-"]');
+        const isEmailCard = item.querySelector('#conv-email-message-view, [datatestid="EMAIL_DETAILS"], #conv-mail-thread-header');
+
+        // ── EMAIL ──
+        if (isEmailCard) {
+            const subjEl = item.querySelector('#conv-mail-thread-header span.text-gray-900, #conv-mail-thread-header .truncate');
+            const fromEl = item.querySelector('.text-gray-900.truncate');
+            const previewEl = item.querySelector('.line-clamp-1, .text-gray-600.truncate');
+            const tsEl = item.querySelector('.text-md.text-gray-600 span, .text-gray-600.cursor-default span');
+            return {
+                type: 'email',
+                fields: {
+                    subject: clean(subjEl && subjEl.textContent),
+                    from: clean(fromEl && fromEl.textContent),
+                    preview: clean(previewEl && previewEl.innerText),
+                    time: clean(tsEl && tsEl.textContent) || getTimestamp(item)
+                }
+            };
+        }
+
+        // ── CALL / VOICEMAIL ──
+        if (isCallCard) {
+            let status = '';
+            item.querySelectorAll('span.text-sm.text-gray-900').forEach(s => {
+                const t = clean(s.textContent);
+                if (/call completed|voicemail|no answer|missed|busy|declined|outgoing|incoming/i.test(t)) status = t;
+            });
+            let duration = '';
+            const durEl = item.querySelector('.audio-player span.min-w-\\[40px\\], .audio-player .text-gray-500.text-sm');
+            if (durEl) {
+                const mm = clean(durEl.textContent).match(/\/\s*(\d{1,2}:\d{2})/);
+                if (mm) duration = mm[1];
+            }
+            const transcript = extractTranscriptLines(item);
+            return {
+                type: 'call',
+                fields: {
+                    status: status || 'call',
+                    direction: getDirection(item),
+                    party: getSenderInitials(item),
+                    duration,
+                    time: getTimestamp(item),
+                    transcript,
+                    // FIX BUG 2: Tag whether a transcript button existed
+                    hadTranscriptButton: !!transcriptBtn
+                }
+            };
+        }
+
+        // ── SYSTEM / ACTIVITY EVENT ──
+        if (!hasBubble && systemPill) {
+            const lineEl = item.querySelector('.text-ellipsis, .justify-center p');
+            const dateEl = item.querySelector('.text-gray-500.text-\\[13px\\]');
+            return {
+                type: 'event',
+                fields: {
+                    text: clean(lineEl && lineEl.innerText),
+                    date: clean(dateEl && dateEl.textContent)
+                }
+            };
+        }
+
+        // ── PLAIN MESSAGE (SMS / chat bubble) ──
+        if (hasBubble) {
+            const body = item.querySelector('.chat-message .font-inter.text-gray-900, .chat-message .text-\\[14px\\]');
+            return {
+                type: 'message',
+                fields: {
+                    direction: getDirection(item),
+                    sender: getSenderInitials(item),
+                    time: getTimestamp(item),
+                    body: clean(body && body.innerText)
+                }
+            };
+        }
+
+        // ── UNKNOWN (last-resort capture so nothing is silently dropped) ──
+        const fallback = clean(item.innerText);
+        if (fallback) {
+            return { type: 'unknown', fields: { text: fallback.slice(0, 1000) } };
+        }
+        return null;
+    }
+
+    // ─── DOCUMENTS PANEL (FILE DOWNLOAD) ─────────────────────────────────────────
+
+    // Opens the contact's "Documents" sidebar panel if it isn't already showing
+    // file rows. We can't reliably detect an "opened but empty" state without
+    // more markup, so after clicking we just wait and let the row scan below
+    // report zero files if that's genuinely the case.
+    async function ensureDocumentsPanelOpen() {
+        if (document.querySelector('div[currentfolderid]')) return true;
+
+        const icon = document.getElementById('sidebar-documents-icon');
+        const btn = icon && icon.closest('button');
+        if (!btn) return false;
+
+        btn.click();
+
+        const start = Date.now();
+        while (Date.now() - start < DOC_PANEL_MAX_WAIT_MS) {
+            if (document.querySelector('div[currentfolderid]')) return true;
+            await sleep(DOC_PANEL_POLL_MS);
+        }
+        return true;
+    }
+
+    // Searches broadly for a visible, clickable element whose text matches
+    // `text` — same "search anywhere" approach as findFullTranscriptExpander,
+    // used here because GHL's dropdown menu is very likely teleported outside
+    // the row's own DOM subtree rather than nested inside it.
+    function findVisibleTextMatch(selectors, text) {
+        const wanted = text.toLowerCase();
+        for (const sel of selectors) {
+            const exact = [...document.querySelectorAll(sel)]
+                .find(el => el.offsetParent !== null && clean(el.textContent).toLowerCase() === wanted);
+            if (exact) return exact;
+        }
+        for (const sel of selectors) {
+            const partial = [...document.querySelectorAll(sel)]
+                .find(el => el.offsetParent !== null && clean(el.textContent).toLowerCase().includes(wanted));
+            if (partial) return partial;
+        }
+        return null;
+    }
+
+    async function clickMenuItemByText(text) {
+        const el = findVisibleTextMatch(
+            ['[role="menuitem"]', '.hr-dropdown-option', '.n-dropdown-option', 'li', 'div.cursor-pointer', 'span', 'button', 'a'],
+            text
+        );
+        if (!el) return false;
+        (el.closest('[role="menuitem"]') || el).click();
+        return true;
+    }
+
+    async function downloadFileRow(row) {
+        const nameEl = row.querySelector('span[title]');
+        const fileName = (nameEl && (nameEl.getAttribute('title') || clean(nameEl.textContent))) || 'file';
+
+        const trigger = row.querySelector('#fileActionOptions-trigger');
+        if (!trigger) return { fileName, ok: false, reason: 'no menu trigger found' };
+
+        trigger.click();
+        await sleep(DOC_MENU_WAIT_MS);
+
+        const clicked = await clickMenuItemByText('download');
+
+        // Force-close any leftover dropdown before moving to the next row.
+        document.body.click();
+        await sleep(150);
+
+        if (!clicked) return { fileName, ok: false, reason: 'no "Download" option found in menu' };
+
+        await sleep(DOC_ROW_GAP_MS);
+        return { fileName, ok: true };
+    }
+
+    async function downloadAllDocuments(onProgress) {
+        const opened = await ensureDocumentsPanelOpen();
+        if (!opened) return { opened: false, total: 0, downloaded: 0, failed: [] };
+
+        await sleep(500);
+
+        const rows = [...document.querySelectorAll('div[currentfolderid]')]
+            .filter(r => r.querySelector('span[title]') && r.querySelector('#fileActionOptions-trigger'));
+
+        const failed = [];
+        let downloaded = 0;
+
+        for (const row of rows) {
+            if (shouldStop) break;
+            const result = await downloadFileRow(row);
+            if (result.ok) downloaded++; else failed.push(`${result.fileName} (${result.reason})`);
+            if (onProgress) onProgress(downloaded + failed.length, rows.length);
+        }
+
+        return { opened: true, total: rows.length, downloaded, failed };
+    }
+
+    // ─── OUTPUT BUILDERS ──────────────────────────────────────────────────────────
+
+    function getContactName() {
+        const sel = [
+            '[data-testid="conversation-header-name"]',
+            '.conversation-header-title',
+            'h2.contact-name',
+            '#conversations-detail-header .truncate'
+        ];
+        for (const s of sel) {
+            const el = document.querySelector(s);
+            if (el && clean(el.textContent)) return clean(el.textContent);
+        }
+        const m = document.title.match(/^(.+?)\s*[-–|]/);
+        return m ? clean(m[1]) : 'Unknown Contact';
+    }
+
+    // Helper to keep XML building DRY
+    function field(tag, val, indent = '      ') {
+        if (val == null || val === '') return '';
+        return `${indent}<${tag}>${escapeXml(val)}</${tag}>\n`;
+    }
+
+    function buildXml(contactName, entries) {
+        let xml = `<ghl_conversation>\n`;
+        xml += `  <contact>${escapeXml(contactName)}</contact>\n`;
+        xml += `  <extracted_at>${escapeXml(new Date().toISOString())}</extracted_at>\n`;
+        xml += `  <message_count>${entries.length}</message_count>\n`;
+        xml += `  <thread>\n`;
+
+        let lastDate = null;
+        for (const { data, date } of entries) {
+            if (!data) continue;
+
+            if (date && date !== lastDate) {
+                xml += `    <day_marker date="${escapeXml(date)}"/>\n`;
+                lastDate = date;
+            }
+
+            const f = data.fields;
+            switch (data.type) {
+                case 'message':
+                    xml += `    <message direction="${escapeXml(f.direction)}">\n`;
+                    xml += field('sender', f.sender);
+                    xml += field('time', f.time);
+                    xml += field('body', f.body);
+                    xml += `    </message>\n`;
+                    break;
+
+                case 'call':
+                    xml += `    <call status="${escapeXml(f.status)}" direction="${escapeXml(f.direction)}">\n`;
+                    xml += field('party', f.party);
+                    xml += field('duration', f.duration);
+                    xml += field('time', f.time);
+                    if (f.transcript && f.transcript.length) {
+                        xml += `      <transcript lines="${f.transcript.length}">\n`;
+                        for (const ln of f.transcript) {
+                            const t = ln.time ? ` time="${escapeXml(ln.time)}"` : '';
+                            xml += `        <line${t}>${escapeXml(ln.text)}</line>\n`;
+                        }
+                        xml += `      </transcript>\n`;
+                    } else {
+                        xml += `      <transcript empty="true"/>\n`;
+                    }
+                    xml += `    </call>\n`;
+                    break;
+
+                case 'email':
+                    xml += `    <email>\n`;
+                    xml += field('subject', f.subject);
+                    xml += field('from', f.from);
+                    xml += field('time', f.time);
+                    xml += field('preview', f.preview);
+                    xml += `    </email>\n`;
+                    break;
+
+                case 'event':
+                    xml += `    <event>\n`;
+                    xml += field('text', f.text);
+                    xml += field('date', f.date);
+                    xml += `    </event>\n`;
+                    break;
+
+                default:
+                    xml += `    <unknown>\n`;
+                    xml += field('text', f.text);
+                    xml += `    </unknown>\n`;
+            }
+        }
+
+        xml += `  </thread>\n`;
+        xml += `</ghl_conversation>`;
+        return xml;
+    }
+
+    function buildJsonOutput(contactName, entries) {
+        return JSON.stringify({
+            contact: contactName,
+            extracted_at: new Date().toISOString(),
+            message_count: entries.length,
+            // FIX BUG 1: Spread fields first, then override with wrapper date/type
+            thread: entries.map(({ data, date }) => ({
+                ...data.fields,
+                type: data.type,
+                date
+            }))
+        }, null, 2);
+    }
+
+
+    // ─── MAIN ─────────────────────────────────────────────────────────────────────
+
+    let isRunning = false;
+
+    async function runExtraction() {
+        if (isRunning) return;
+        isRunning = true;
+        shouldStop = false;
+        toggle.classList.add('gx-working');
+        toggle.innerHTML = '<span class="gx-toggle-emoji">⏹</span><span class="gx-toggle-label">Stop</span>';
+        toggle.title = 'Click to stop extraction';
+        closeMenu();
+
+        try {
+            showToast('Loading full thread...', 'success', 60000);
+            harvestWholeThread._onLoadProgress = (count, rounds) => {
+                showToast(`Loading history… ${count} messages so far`, 'success', 120000);
+            };
+            showToast('Loading older messages…', 'success', 120000);
+            const result = await harvestWholeThread();
+
+            if (shouldStop) {
+                showToast('⏹ Extraction stopped during loading', 'error', 5000);
+                return;
+            }
+
+            if (!result.container) {
+                showToast('⚠ Could not find the conversation scroll area', 'error', 6000);
+                return;
+            }
+
+            showToast('Building output...', 'success', 60000);
+            const entries = result.entries;
+            const contactName = getContactName();
+
+            let content;
+            let mimeType;
+            let extension;
+
+            if (CONFIG.format === 'json') {
+                content = buildJsonOutput(contactName, entries);
+                mimeType = 'application/json';
+                extension = 'json';
+            } else {
+                content = buildXml(contactName, entries);
+                mimeType = 'text/xml';
+                extension = 'xml';
+            }
+
+            if (CONFIG.action === 'copy') {
+                if (typeof GM_setClipboard === 'function') {
+                    GM_setClipboard(content, 'text');
+                } else {
+                    await navigator.clipboard.writeText(content);
+                }
+            } else {
+                const blob = new Blob([content], { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `ghl_conversation_${contactName.replace(/\s+/g, '_')}.${extension}`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+
+            // Optionally download every file in the Documents panel
+            let fileStats = null;
+            if (CONFIG.files === 'download' && !shouldStop) {
+                showToast('Downloading attached files…', 'success', 60000);
+                fileStats = await downloadAllDocuments((done, total) => {
+                    showToast(`Downloading files… ${done}/${total}`, 'success', 60000);
+                });
+            }
+
+            if (shouldStop) {
+                showToast('⏹ Extraction stopped', 'error', 5000);
+                return;
+            }
+
+            // Diagnostics
+            const counts = entries.reduce((a, e) => {
+                if (e.data) a[e.data.type] = (a[e.data.type] || 0) + 1;
+                return a;
+            }, {});
+
+            const transcriptsFound = entries.filter(
+                e => e.data && e.data.type === 'call' &&
+                     e.data.fields.transcript && e.data.fields.transcript.length
+            ).length;
+
+            // FIX BUG 2: Only count as "empty/fail" if it HAD a button but returned no lines
+            const emptyTranscripts = entries.filter(
+                e => e.data && e.data.type === 'call' &&
+                     e.data.fields.hadTranscriptButton &&
+                     e.data.fields.transcript.length === 0
+            ).length;
+
+            const actionText = CONFIG.action === 'copy' ? 'Copied' : 'Downloaded';
+            let diagMsg = `✓ ${actionText} — Msgs: ${counts.message || 0} · Calls: ${counts.call || 0} ` +
+                `(${transcriptsFound} transcripts) · Emails: ${counts.email || 0} · ` +
+                `Events: ${counts.event || 0} · Total: ${entries.length}`;
+
+            if (emptyTranscripts > 0) {
+                diagMsg += `\n⚠ ${emptyTranscripts} call(s) had empty transcripts`;
+            }
+
+            if (fileStats) {
+                if (!fileStats.opened) {
+                    diagMsg += `\n📎 Could not open Documents panel`;
+                } else if (fileStats.total === 0) {
+                    diagMsg += `\n📎 No files found in Documents panel`;
+                } else {
+                    diagMsg += `\n📎 Files: ${fileStats.downloaded}/${fileStats.total} downloaded`;
+                    if (fileStats.failed.length) {
+                        diagMsg += ` (failed: ${fileStats.failed.join('; ')})`;
+                    }
+                }
+            }
+
+            showToast(diagMsg, 'success', 9000);
+
+        } catch (err) {
+            console.error('[GHL Extractor]', err);
+            showToast('✗ Extraction failed: ' + err.message, 'error', 6000);
+        } finally {
+            toggle.innerHTML = '<span class="gx-toggle-emoji">📋</span><span class="gx-toggle-label">Extract</span>';
+            toggle.title = 'Extract conversation context (Drag to move · Right-click for options)';
+            toggle.classList.remove('gx-working');
+            isRunning = false;
+            shouldStop = false;
+        }
+    }
+
+})();

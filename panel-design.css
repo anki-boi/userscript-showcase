@@ -1,0 +1,96 @@
+/* ============================================================================
+ * panel-design.css — the userscript design system (Warm Paper theme)
+ * ============================================================================
+ * Decision: Jeyson picked Warm Paper (2026-08-06, after previewing Zoho Slate
+ * first) for ALL scripts — including the LifeFile userscripts (he reversed the
+ * earlier exclusion). Light, flat, matte. No gradients, no gloss, 1px borders
+ * instead of shadows. Tokens are prefixed --ds- so they can never collide with
+ * the host app's own CSS variables (Zoho/GHL/Sheets define plain --accent).
+ *
+ * ROLLOUT RULE: every script-injected panel remaps its chrome to these tokens
+ * with the ORIGINAL hex as the var() fallback:
+ *     background: var(--ds-surface, #ffffff);
+ * so a missing token block degrades to the old look, never to a broken one.
+ * The token block itself (the :root rule below) is injected at the top of the
+ * script's main CSS literal — see DESIGN.md for the per-script tracker.
+ * ==========================================================================*/
+
+:root {
+  --ds-bg:          #faf8f5;  /* page backdrop behind panels        */
+  --ds-surface:     #fffdf9;  /* panel body, cards, inputs (warm paper) */
+  --ds-surface2:    #f4f0e9;  /* header bars, hover fills, wells     */
+  --ds-border:      #e8e2d8;  /* 1px matte borders                   */
+  --ds-text:        #2b2620;  /* primary text (warm ink)             */
+  --ds-muted:       #7a7163;  /* secondary text, footers             */
+  --ds-accent:      #8a5f2e;  /* primary buttons, links, active tab (bronze) */
+  --ds-accent-text: #ffffff;  /* text ON accent fills                */
+  --ds-success:     #3d7a46;  /* ok / copied / done                  */
+  --ds-warn:        #a16207;  /* attention / pending                 */
+  --ds-danger:      #b3402e;  /* blocked / failed / reset            */
+  --ds-info:        #2c6e9c;  /* info / in-progress                  */
+}
+
+/* ---- component recipes (apply to new panels; retrofit old ones) ---- */
+
+/* Panel chrome: light surface, 1px border, small radius, matte (no heavy shadow) */
+.ds-panel {
+  background: var(--ds-surface, #ffffff);
+  border: 1px solid var(--ds-border, #dfe5ea);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(31, 45, 61, 0.08);   /* matte: soft, never glossy */
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  color: var(--ds-text, #1f2d3d);
+}
+.ds-head {
+  background: var(--ds-surface2, #eef2f5);
+  border-bottom: 1px solid var(--ds-border, #dfe5ea);
+  padding: 7px 10px;
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700;
+}
+.ds-ver {                       /* version badge in the header */
+  background: var(--ds-accent, #1a73e8);
+  color: var(--ds-accent-text, #ffffff);
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px; font-weight: 600;
+}
+.ds-close { margin-left: auto; border: none; background: none;
+  color: var(--ds-muted, #64748b); font-size: 14px; cursor: pointer; }
+
+/* Buttons */
+.ds-btn { border: 1px solid var(--ds-border, #dfe5ea); background: var(--ds-surface, #ffffff);
+  color: var(--ds-text, #1f2d3d); border-radius: 6px; padding: 5px 11px;
+  font-size: 12px; font-weight: 600; cursor: pointer; }
+.ds-btn:hover { background: var(--ds-surface2, #eef2f5); }
+.ds-btn.primary { background: var(--ds-accent, #1a73e8); border-color: var(--ds-accent, #1a73e8);
+  color: var(--ds-accent-text, #ffffff); }
+.ds-btn.primary:hover { filter: brightness(0.96); }
+.ds-btn.danger { background: var(--ds-danger, #d93025); border-color: var(--ds-danger, #d93025);
+  color: #ffffff; }
+.ds-btn:disabled { opacity: .45; cursor: default; }
+
+/* Chips (multi-select accumulators) */
+.ds-chip { border: 1px solid var(--ds-border, #dfe5ea); background: var(--ds-surface, #ffffff);
+  color: var(--ds-text, #1f2d3d); border-radius: 999px; padding: 3px 10px; font-size: 11.5px; cursor: pointer; }
+.ds-chip.on { background: var(--ds-accent, #1a73e8); border-color: var(--ds-accent, #1a73e8);
+  color: var(--ds-accent-text, #ffffff); }
+
+/* Tables */
+.ds-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ds-table th { text-align: left; color: var(--ds-muted, #64748b); font-weight: 600;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 5px 8px; border-bottom: 1px solid var(--ds-border, #dfe5ea); }
+.ds-table td { padding: 6px 8px; border-bottom: 1px solid var(--ds-border, #dfe5ea); }
+.ds-table a { color: var(--ds-accent, #1a73e8); text-decoration: none; font-weight: 600; }
+.ds-table a:hover { text-decoration: underline; }
+
+/* Status colors — one language everywhere: green=done, amber=attention, red=blocked */
+.ds-ok   { color: var(--ds-success, #1e8e3e); font-weight: 700; }
+.ds-warn { color: var(--ds-warn, #b45309);    font-weight: 700; }
+.ds-err  { color: var(--ds-danger, #d93025);  font-weight: 700; }
+
+/* Toast */
+.ds-toast { position: fixed; top: 18px; right: 18px; background: var(--ds-surface, #ffffff);
+  border: 1px solid var(--ds-border, #dfe5ea); border-left: 4px solid var(--ds-success, #1e8e3e);
+  border-radius: 8px; padding: 10px 14px; font-size: 12.5px; z-index: 2147483647; }
+.ds-toast.err { border-left-color: var(--ds-danger, #d93025); }

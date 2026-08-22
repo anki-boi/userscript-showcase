@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FedEx Tracking Copier
 // @namespace    drjones
-// @version      2.6
+// @version      2.8
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Auto-copy tracking number + ship/label date from FedEx tracking pages
@@ -12,7 +12,20 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[FedEx v2.6] boot');
+console.info('[FedEx v2.8] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['FedEx'] = {
+  name: 'FedEx Tracking Copier',
+  version: '2.8',
+  state: 'idle',
+  message: '',
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -112,7 +125,9 @@ console.info('[FedEx v2.6] boot');
     const text = `\nDate Shipped: ${shipDate}\nTN: FedEx - ${trackingNum}`;
     navigator.clipboard.writeText(text).then(() => {
       toast('✓ Tracking copied', true);
-      setTimeout(() => window.close(), 700);
+      // v2.7 (Jeyson): self-close DISABLED — this tab may be Tracking Bus's
+      // reused one-tab-at-a-time carrier tab; closing it kills the run.
+      // Manual opens now stay open (close the tab yourself when done).
     }).catch(() => toast('⚠ Copy failed', false));
   }
 
@@ -199,4 +214,18 @@ console.info('[FedEx v2.6] boot');
   } else {
     waitForTracking();
   }
+
+  // R18: trigger dispatcher
+  const api = window.__scripts['FedEx'];
+  api.trigger = function (action) {
+    if (action === 'extract') {
+      const tn = getTracking();
+      if (!tn) { api.state = 'error'; api.error = 'No tracking number found'; api.lastActivity = Date.now(); return { ok: false, error: api.error }; }
+      const date = getShipDate();
+      const text = '\nDate Shipped: ' + (date || 'N/A') + '\nTN: FedEx - ' + tn;
+      api.output = text; api.state = 'done'; api.message = 'Extracted: ' + tn; api.lastActivity = Date.now();
+      return { ok: true, output: text };
+    }
+    return { ok: false, error: 'unknown action: ' + action };
+  };
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GLP-1 Dosing Calculator
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.8
 // @description  Auto-calculates GLP-1 order block dosing (total-dose and duration modes)
 // @author       Jeyson Dagondon
 // @grant        none
@@ -11,7 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[GLP1 v1.6] boot');
+console.info('[GLP1 v1.8] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['GLP1'] = { name: 'GLP-1 Dosing Calculator', version: '1.8', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -29,6 +33,7 @@ console.info('[GLP1 v1.6] boot');
             { label: "16mg total (4mg/0.5mL, 2mL vial)",   conc: 8,  volume: 2, total: 16 },
             { label: "32mg total (8mg/0.5mL, 2mL vial)",   conc: 16, volume: 2, total: 32 },
             { label: "48mg total (12mg/0.5mL, 2mL vial)",  conc: 24, volume: 2, total: 48 },
+            { label: "64mg total (8mg/0.5mL, 2 x 2mL vials)", conc: 16, volume: 4, total: 64 },
         ],
         "Semaglutide/Cyanocobalamin": [
             { label: "1mg total (0.25mg/0.5mg/0.5mL, 2mL vial)", conc: 0.5, volume: 2, total: 1 },

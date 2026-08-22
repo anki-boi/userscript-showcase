@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RxFlow Sale Automator
 // @namespace    jeyson-sale-automator
-// @version      2.8
+// @version      2.16
 // @author       Jeyson Dagondon
 // @description  Auto-drive RxFlow sales from CSV/JSON rows: lookup, consent, products
 // @match        https://staff.exampleclinic.com/*
@@ -11,10 +11,33 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[PSA v2.8] boot');
+console.info('[PSA v2.16] boot');
 
+// --- Script API (R18) — agent-facing status/trigger/output channel ---
+window.__scripts = window.__scripts || {};
+window.__scripts['PSA'] = {
+  name: 'RxFlow Sale Automator',
+  version: '2.16',
+  state: 'idle',
+  message: '',
+  progress: null,
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
 (function () {
     'use strict';
+    const api = window.__scripts['PSA'];
+    function apiSet(state, message, extra) {
+      api.state = state;
+      api.message = message || '';
+      api.lastActivity = Date.now();
+      if (extra) Object.assign(api, extra);
+      if (state === 'error') api.error = message || '';
+      if (state === 'done' || state === 'idle') { api.error = null; }
+      console.info(`[PSA] API: ${state}${message ? ' — ' + message : ''}`);
+    }
 
     /* =========================================================================
        SECTION 1 — CONFIG / REFERENCE DATA
@@ -24,8 +47,10 @@ console.info('[PSA v2.8] boot');
        ========================================================================= */
 
     // Product catalog, carried over from the existing Product Quick Nav script.
+    // v2.9: RxFlow renamed the med-type button "Peptide" -> "Peptides"
+    // (2026-08-17) and moved GLOW to the STK brand; BPC-157/KPV/TB500 added.
     const CATALOG = {
-        "Peptide": {
+        "Peptides": {
             "Longevity": [
                 "[GRE] Epithalon injectable",
                 "[GRE] GHK-Cu injectable",
@@ -43,8 +68,9 @@ console.info('[PSA v2.8] boot');
             "Healing": [
                 "[GRE] BPC-157 capsules",
                 "[GRE] BPC-157 injectable",
+                "[GRE] BPC-157/KPV/TB500",
                 "[GRE] BPC-157/TB-500 capsules",
-                "[GRE] GLOW",
+                "[STK] GLOW",
                 "[GRE] KLOW",
                 "[GRE] Wolverine 1",
                 "[STK] TB500 injectable"
@@ -93,10 +119,11 @@ console.info('[PSA v2.8] boot');
     // new shorthand shows up in the sheet.
     const PRODUCT_ALIASES = {
         "klow": "[GRE] KLOW",
-        "glow": "[GRE] GLOW",
+        "glow": "[STK] GLOW",
         "tesa/ipa": "[GRE] Tesamorelin/Ipamorelin injectable",
         "tesa": "[GRE] Tesamorelin injectable",
         "epithalon": "[GRE] Epithalon injectable",
+        "thymosin alpha-1 inj": "[GRE] Thymosin injectable",
         "thymosin inj": "[GRE] Thymosin injectable",
         "thymosin": "[GRE] Thymosin injectable",
         "dsip inj": "[GRE] DSIP injectable",
@@ -104,6 +131,8 @@ console.info('[PSA v2.8] boot');
         "bpc": "[GRE] BPC-157 injectable",
         "bpc-157": "[GRE] BPC-157 injectable",
         "bpc-157 caps": "[GRE] BPC-157 capsules",
+        "bpc-157/kpv/tb500": "[GRE] BPC-157/KPV/TB500",
+        "bpc/kpv/tb500": "[GRE] BPC-157/KPV/TB500",
         "wolverine": "[GRE] Wolverine 1",
         "wolverine 1": "[GRE] Wolverine 1",
         "nad+": "[GRE] NAD+ Injectable",
@@ -120,7 +149,10 @@ console.info('[PSA v2.8] boot');
         "bpc157": "[GRE] BPC-157 injectable",
         "bpc157 inj": "[GRE] BPC-157 injectable",
         "nad+ inj": "[GRE] NAD+ Injectable",
-        "nad inj": "[GRE] NAD+ Injectable"
+        "nad inj": "[GRE] NAD+ Injectable",
+        // v2.14 (2026-08-19): GHK-Cu shorthand — "3 GHK-Cu Inj." hit unmapped.
+        "ghk-cu inj": "[GRE] GHK-Cu injectable",
+        "ghk-cu": "[GRE] GHK-Cu injectable"
         // Anything typed in the sheet that isn't a key here (e.g.
         // a brand-new product) will surface as an "unmapped item" for
         // manual handling rather than silently failing.
@@ -310,6 +342,20 @@ console.info('[PSA v2.8] boot');
     // canonical field it feeds (columns not listed are ignored by the automator).
     // v1.27: order refreshed to match the live sheet (Intake Link after Phone,
     // Confirmed Shipping / Medical Action added; Patient State column is gone).
+    // ── BUSINESS CONTEXT: the "Existing RxFlow Patient" column ──────────
+    // (Jeyson, 2026-08-18 — do not "fix" this semantics back into a profile
+    // check. A non-empty value, e.g. "YES - Do Not Resend Intake", means the
+    // patient has ordered BEFORE and a sale was already created for them, so
+    // there is no need to SEND them another intake questionnaire — which is
+    // exactly why the automator fills the questionnaire FOR them (prefill
+    // from their profile, human reviews + presses Submit). Blank = new
+    // patient (no prior order/sale) → auto-skip the questionnaire.
+    // CRITICAL: the column records PRIOR-SALE status, NOT mere existence in
+    // RxFlow — finding a profile in the search does NOT imply a prior
+    // sale, so never derive existingPatient from profile-check results.
+    // This column is the SINGLE source of truth for the skip decision
+    // (v2.12; the profile-check pass used to overwrite it — that was the
+    // auto-skip regression).
     const FIXED_HEADER_ORDER = [
         "Patient Name", "Patient Email", "Phone", "Intake Link",
         "RxFlow Patient ID", "Purchase", "Existing RxFlow Patient",
@@ -639,6 +685,7 @@ console.info('[PSA v2.8] boot');
         if (!statusEl) return;
         statusEl.textContent = text;
         statusEl.style.color = isError ? "#c0392b" : (ok ? "#27ae60" : "#555");
+        if (isError && statusEl.id === "psa-status") { api.state = 'error'; api.message = text; api.error = text; api.lastActivity = Date.now(); }
     }
 
     /* =========================================================================
@@ -667,6 +714,9 @@ console.info('[PSA v2.8] boot');
             // v2.2: strip a leading duration token ("1 Year Tesa/IPA" ->
             // "Tesa/IPA") — the sheet sometimes prefixes plan durations.
             rawAlias = rawAlias.replace(/^(year|years|yr|month|months|mo|week|weeks|wk|day|days)\s+/i, "");
+            // v2.14: drop trailing sentence punctuation ("GHK-Cu Inj." -> "GHK-Cu Inj")
+            // so shorthand ending in a period still resolves.
+            rawAlias = rawAlias.replace(/[.,;:]+$/, "");
             const key = rawAlias.toLowerCase();
             const productName = PRODUCT_ALIASES[key];
             if (!productName || !PRODUCT_INDEX[productName]) {
@@ -843,6 +893,7 @@ console.info('[PSA v2.8] boot');
 
             if (matches.length > 1) {
                 setStatus(panel.status, `${matches.length} matches found via ${candidate.label} — pick the right one below.`, false, true);
+                apiSet('waiting_human', `${matches.length} matches — pick one`);
                 matches.forEach((rowEl) => {
                     const btn = document.createElement("button");
                     btn.className = "psa-btn";
@@ -1101,9 +1152,14 @@ console.info('[PSA v2.8] boot');
         }
     }
 
-    // Applies the pass results to the persisted queue: fills patient IDs and
-    // the existing-patient flag on found rows, removes the no-profile rows,
-    // keeps ambiguous/no-identifier rows flagged for the human.
+    // Applies the pass results to the persisted queue: fills patient IDs on
+    // found rows, removes the no-profile rows, keeps ambiguous/no-identifier
+    // rows flagged for the human. NOTE (v2.12): the pass does NOT touch
+    // r.existingPatient anymore — the sheet's "Existing RxFlow Patient"
+    // column is the single source of truth for the skip-questionnaire
+    // decision (non-empty = prefill + human submit; blank = auto-skip).
+    // v1.27 used to flag found rows existingPatient="TRUE", which made
+    // blank-column rows stop auto-skipping (Jeyson 2026-08-18).
     function applyProfileCheckResults(panel, results) {
         clearJob();
         const queue = loadQueue() || [];
@@ -1114,11 +1170,9 @@ console.info('[PSA v2.8] boot');
             const status = res ? res.status : "has-id";
             if (status === "found") {
                 r.patientId = res.patientId;
-                r.existingPatient = "TRUE"; // a found profile IS an existing patient
                 delete r._checkNote;
                 kept.push(r);
             } else if (status === "has-id") {
-                r.existingPatient = "TRUE"; // ID already in the sheet = existing patient
                 delete r._checkNote;
                 kept.push(r);
             } else if (status === "ambiguous") {
@@ -1152,13 +1206,34 @@ console.info('[PSA v2.8] boot');
         // Confirmed real markup: <img class="verified_img" src=".../verified.png">
         // sitting near the label when a field is checked. Walk up a few
         // ancestor levels since the icon isn't always a direct sibling.
+        // NOTE: the verified_img class is shared by THREE images (live-captured
+        // 2026-08-18) — verified.png = genuinely checked; green-check.png = the
+        // Driver's License loading placeholder that LOOKS like a checkmark;
+        // remove.png = red X shown for "Patient Verified:" when NOT verified.
+        // Match on class AND filename so the green-check/remove decoys never
+        // read as "checked".
         let node = labelEl.parentElement;
         for (let i = 0; i < 3 && node; i++) {
-            const icon = node.querySelector('img.verified_img, img[src*="verified" i]');
+            const icon = node.querySelector('img.verified_img[src*="verified.png"]');
             if (icon) return icon;
             node = node.parentElement;
         }
         return null;
+    }
+
+    function findNotYetMarker(labelEl) {
+        // The Driver's License row settles unvalidated into a "Not yet Verified"
+        // link once the green-check placeholder is gone. If any leaf a/span/div
+        // in the field's OWN container still says "not yet", that is
+        // authoritative — the field is NOT checked even if a decoy icon happens
+        // to be present. IMPORTANT: scope to labelEl.parentElement ONLY — the
+        // parent .show_pat_content div holds just this one field (label + icon
+        // + marker). Walking further up reaches the shared column div, where the
+        // license's "Not yet Verified" link would wrongly mark EVERY field in
+        // the column as not-checked (hit live 2026-08-18).
+        const parent = labelEl.parentElement;
+        if (!parent) return null;
+        return [...parent.querySelectorAll("a, span, div")].find((el) => el.children.length === 0 && /not yet/i.test(el.textContent)) || null;
     }
 
     function detectConsentStatus() {
@@ -1168,11 +1243,16 @@ console.info('[PSA v2.8] boot');
             const labelEl = [...document.querySelectorAll("*")].find((el) => el.children.length === 0 && el.textContent.trim() === label);
             if (!labelEl) { results[label] = "unknown"; continue; }
             const icon = findNearbyVerifiedIcon(labelEl);
-            // NOTE: absence of the verified icon is treated as not-checked.
-            // The unchecked-state markup itself hasn't been confirmed yet —
-            // if this ever misreads a genuinely checked field, send the
-            // Inspect HTML for that case too and this can be tightened.
-            results[label] = icon ? "checked" : "not-checked";
+            const notYet = findNotYetMarker(labelEl);
+            // The three verified_img states (confirmed live 2026-08-18):
+            //   verified.png     -> genuinely checked
+            //   green-check.png  -> Driver's License loading placeholder (looks
+            //                       like a checkmark but means nothing yet)
+            //   remove.png       -> red X, "Patient Verified:" NOT verified
+            // A "Not yet Verified" marker is authoritative: a field is checked
+            // ONLY when the real verified.png icon is present AND no not-yet
+            // marker is nearby; everything else reads as not-checked.
+            results[label] = icon && !notYet ? "checked" : "not-checked";
         }
         return results;
     }
@@ -1250,25 +1330,57 @@ console.info('[PSA v2.8] boot');
         await stepCreateSale(job, panel);
     }
 
+    // The license section renders its placeholder (green-check.png) first and
+    // settles into the real status a few seconds later, so a single read can be
+    // wrong — the decoy can read as "checked" then the real "Not yet Verified"
+    // arrives late (or vice versa). Never trust a single read: poll until the
+    // status is stable for 3 consecutive identical readings (~2.5s apart,
+    // ~7.5s of stability) before auto-proceeding. Returns null if the render
+    // goes stale (Stop/Reset must abort it), else the settled status; on
+    // timeout it returns one final detectConsentStatus() read.
+    async function waitForConsentSettle(timeoutMs = 20000) {
+        const isCurrent = beginRender();
+        const start = Date.now();
+        let prevSignature = null;
+        let stableCount = 0;
+        while (Date.now() - start < timeoutMs) {
+            if (!isCurrent()) return null;
+            const status = detectConsentStatus();
+            const signature = JSON.stringify(status);
+            if (signature === prevSignature) {
+                stableCount++;
+                if (stableCount >= 3) return status;
+            } else {
+                stableCount = 1;
+                prevSignature = signature;
+            }
+            await sleep(2500);
+        }
+        return detectConsentStatus();
+    }
+
     async function stepConsentCheck(job, panel) {
         const isCurrent = beginRender();
 
         // Guard: this step belongs on the patient's profile page. If we're not
         // there yet (navigation still in flight, or the profile never opened),
         // wait briefly for the URL — never render a bogus "unknown" consent
-        // panel on the wrong page.
-        if (location.pathname.indexOf("/patient-details/") === -1) {
+        // panel on the wrong page. Profiles are served at /patient-details/<id>
+        // AND at /patient-sales/<id> (the full profile block lives there); the
+        // plain /patient-sales listing page (no id) must NOT match.
+        const onProfilePage = () => location.pathname.indexOf("/patient-details/") === 0 || /^\/patient-sales\/\d+/.test(location.pathname);
+        if (!onProfilePage()) {
             for (let i = 0; i < 24; i++) {
-                if (location.pathname.indexOf("/patient-details/") !== -1) break;
+                if (onProfilePage()) break;
                 await sleep(250);
             }
         }
-        if (location.pathname.indexOf("/patient-details/") === -1) {
+        if (!onProfilePage()) {
             if (!isCurrent()) return;
             panel.body.innerHTML = "";
             const msg = document.createElement("div");
             msg.id = "psa-status";
-            msg.textContent = "Open the patient's profile (Patient Details) — the consent check runs there.";
+            msg.textContent = "Open the patient's profile (Patient Details or patient Sales page) — the consent check runs there.";
             msg.style.color = "#c0392b";
             panel.body.appendChild(msg);
             panel.status = msg;
@@ -1284,19 +1396,35 @@ console.info('[PSA v2.8] boot');
             await sleep(250);
         }
 
+        // The settle poll can take up to ~20s — show a progress line so the
+        // panel doesn't look hung while it and the measurements harvest run.
+        // The later render (below) wipes this when the real results appear.
+        if (isCurrent()) {
+            panel.body.innerHTML = "";
+            const waitMsg = document.createElement("div");
+            waitMsg.id = "psa-status";
+            waitMsg.textContent = "Waiting for the consent status to settle (checking repeatedly)...";
+            panel.body.appendChild(waitMsg);
+            panel.status = waitMsg;
+        }
+
         // Harvest height/weight while on the profile page so the sale-form
         // questionnaire can be prefilled later (existing patients).
         // NOTE: the profile shows PLACEHOLDER values ("Non Reported", "--",
         // blank) while its data loads async, then the real values — so WAIT
-        // for real data before harvesting (v1.20).
-        const measurements = (await waitForProfileMeasurements()) || harvestProfileMeasurements();
+        // for real data before harvesting (v1.20). Run the consent settle
+        // concurrently with the harvest — both wait on the page's async data.
+        const [settledStatus, measurements] = await Promise.all([
+            waitForConsentSettle(),
+            waitForProfileMeasurements().then((m) => m || harvestProfileMeasurements())
+        ]);
         if (measurements.heightLabel) job.heightLabel = measurements.heightLabel;
         if (measurements.heightIn) job.heightIn = measurements.heightIn;
         if (measurements.weightLbs) job.weightLbs = measurements.weightLbs;
         if (measurements.gender) job.gender = measurements.gender;
         if (measurements.heightLabel || measurements.weightLbs || measurements.gender) saveJob(job);
 
-        const status = detectConsentStatus();
+        const status = settledStatus || detectConsentStatus();
         const allGood = Object.values(status).every((s) => s === "checked");
 
         if (!isCurrent()) return;
@@ -1906,7 +2034,10 @@ console.info('[PSA v2.8] boot');
                 await goToProduct(item.medType, item.category, item.product, item.qty, item.requestedQty, item.capped, panel);
             }
 
-            const skip = !job.row.existingPatient; // blank -> skip; has a value -> prefill + human review
+            // v2.12 (Jeyson rule): the sheet column is the SOLE source of
+            // truth — blank -> auto-skip; non-empty -> prefill + human
+            // review/submit. The profile-check pass no longer overwrites it.
+            const skip = !job.row.existingPatient;
             if (skip) {
                 // New patients: skip the questionnaire entirely (established flow).
                 // v2.0: report how many questionnaires were actually skipped so
@@ -1943,12 +2074,15 @@ console.info('[PSA v2.8] boot');
         if (!continueBtn) { setStatus(panel.status, "Could not find Continue button.", false, true); return; }
 
         setStatus(panel.status, "Ready — click Continue below to finish this row (script stops here).", true);
+        apiSet('waiting_human', 'At Continue gate — ready to finish row');
         const continueTrigger = document.createElement("button");
         continueTrigger.className = "psa-btn psa-btn-primary";
         continueTrigger.textContent = "Click Continue";
         continueTrigger.addEventListener("click", () => {
             continueBtn.click();
             setStatus(panel.status, "Continue clicked. Row complete — provider selection is manual from here.", true);
+            api.output = { row: job.row, completedAt: new Date().toISOString(), note: 'provider selection is manual from here' };
+            apiSet('done', 'Row complete — provider selection is manual from here');
             clearJob();
             renderQueueStrip(panel); // next patient's row is one click away
         });
@@ -1972,6 +2106,8 @@ console.info('[PSA v2.8] boot');
             #psa-reset { font-size: 10px; font-weight: normal; padding: 2px 6px; border: 1px solid var(--ds-danger, #c0392b);
                 border-radius: 3px; background: var(--ds-danger, #c0392b); color: #fff; cursor: pointer; }
             #psa-reset:hover { background: var(--ds-danger, #e74c3c); }
+            #psa-stop { font-size: 10px; font-weight: normal; padding: 2px 6px; border: 1px solid #7a1f12; border-radius: 3px; background: var(--ds-danger, #b3402e); color: #fff; cursor: pointer; }
+            #psa-stop:hover { background: #d9534f; }
             #psa-body { padding: 8px; }
             #psa-body.collapsed { display: none; }
             #psa-input { width: 100%; height: 90px; font-family: monospace; font-size: 11px; box-sizing: border-box; }
@@ -2024,6 +2160,8 @@ console.info('[PSA v2.8] boot');
             panelEpoch++; // abandon any in-flight async step
             renderQueueStrip(panel);
             renderInputStage(panel);
+            api.output = null; api.progress = null;
+            apiSet('idle');
         });
 
         // v1.24: the panel is draggable by its header. A drag moves the panel
@@ -2037,7 +2175,7 @@ console.info('[PSA v2.8] boot');
             body.classList.toggle("collapsed");
         });
         header.addEventListener("mousedown", (e) => {
-            if (e.target.closest("#psa-reset")) return;
+            if (e.target.closest("#psa-reset, #psa-stop")) return;
             suppressToggle = false;
             const rect = panelEl.getBoundingClientRect();
             drag = { startX: e.clientX, startY: e.clientY, left: rect.left, top: rect.top, moved: false };
@@ -2069,8 +2207,27 @@ console.info('[PSA v2.8] boot');
             drag = null;
         });
 
+        const stopBtn = document.createElement("button");
+        stopBtn.id = "psa-stop";
+        stopBtn.textContent = "■ Stop";
+        stopBtn.title = "Stop the current process immediately — works at any step, any time";
+        stopBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            clearJob();
+            panelEpoch++; // abandon any in-flight async step
+            renderQueueStrip(panel);
+            renderRunStatus(panel, "Stopped. Rows are still in the queue — click Run to start again.");
+            apiSet('idle', 'Stopped — queue preserved');
+        });
+
+        // Right-aligned button group: Stop (abort now, keep the queue visible)
+        // + Reset (clear the job and return to the input stage).
+        const headerBtns = document.createElement("span");
+        headerBtns.style.cssText = "display:flex; gap:4px; align-items:center;";
+        headerBtns.appendChild(stopBtn);
+        headerBtns.appendChild(resetBtn);
         header.appendChild(headerTitle);
-        header.appendChild(resetBtn);
+        header.appendChild(headerBtns);
         panelEl.appendChild(header);
 
         // v1.26: the row queue strip lives OUTSIDE #psa-body, so step renders
@@ -2360,6 +2517,8 @@ console.info('[PSA v2.8] boot');
         panel.body.appendChild(status);
         panel.status = status;
         setStatus(status, message, false);
+        api.message = message; // R18: sync API message
+        api.lastActivity = Date.now();
     }
 
     function startRow(panel, row) {
@@ -2368,6 +2527,9 @@ console.info('[PSA v2.8] boot');
         saveJob(job);
         renderQueueStrip(panel);
         renderRunStatus(panel, `Starting ${row.patientName || row.patientId || "(no identifier)"} — searching...`);
+        const q = loadQueue();
+        const idx = q ? q.findIndex(r => r._id === row._id) + 1 : 0;
+        apiSet('running', `Row ${idx}: ${row.patientName || row.patientId || '(no identifier)'}`, { progress: { current: idx, total: q ? q.length : 0, step: 'search' } });
         runCurrentStep(panel);
     }
 
@@ -2426,6 +2588,11 @@ console.info('[PSA v2.8] boot');
     async function runCurrentStep(panel) {
         const job = loadJob();
         if (!job) return;
+        if (api.state === 'running' || api.state === 'waiting_human') {
+          api.progress = api.progress || {};
+          api.progress.step = job.step;
+          api.lastActivity = Date.now();
+        }
 
         switch (job.step) {
             case "search":
@@ -2465,6 +2632,39 @@ console.info('[PSA v2.8] boot');
         panel.body.appendChild(status);
         panel.status = status;
         setStatus(status, `Resuming job at step "${existingJob.step}"...`);
+        apiSet('running', `Resuming at step "${existingJob.step}"`, { progress: { step: existingJob.step } });
         runCurrentStep(panel);
     }
+
+    // R18: trigger dispatcher (agent entry point)
+    api.trigger = function (action, params) {
+      if (action === 'start-row') {
+        if (api.state === 'running' && !api.message.match(/stopped|idle/i)) {
+          return { ok: false, error: 'already running' };
+        }
+        const q = loadQueue() || [];
+        if (q.length === 0) return { ok: false, error: 'queue is empty — paste rows first' };
+        const row = params && params.id ? q.find(r => r._id === params.id) : q[0];
+        if (!row) return { ok: false, error: 'row not found' };
+        startRow(panel, row);
+        return { ok: true };
+      }
+      if (action === 'continue') {
+        const btn = panel.body.querySelector('.psa-btn.psa-btn-primary');
+        if (!btn) return { ok: false, error: 'no Continue button visible (not at the gate)' };
+        btn.click();
+        return { ok: true };
+      }
+      if (action === 'stop') {
+        const btn = document.getElementById('psa-stop');
+        if (btn) btn.click();
+        return { ok: true };
+      }
+      if (action === 'reset') {
+        const btn = document.getElementById('psa-reset');
+        if (btn) btn.click();
+        return { ok: true };
+      }
+      return { ok: false, error: `unknown action: ${action}` };
+    };
 })();

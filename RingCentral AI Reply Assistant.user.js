@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RingCentral AI Reply Assistant
 // @namespace    https://drjonesdc.com
-// @version      4.2.6
+// @version      4.4.3
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Harvests the RingCentral SMS conversation and drafts AI replies to paste in
@@ -12,6 +12,7 @@
 // @grant        GM_xmlhttpRequest
 // @connect      api.anthropic.com
 // @connect      api.openai.com
+// @connect      api.deepseek.com
 // @connect      generativelanguage.googleapis.com
 // @connect      localhost
 // @connect      127.0.0.1
@@ -19,7 +20,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[RC AI v4.2.6] boot');
+console.info('[RC AI v4.4.3] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['RC-AI'] = { name: 'RingCentral AI Reply Assistant', version: '4.4.3', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -35,6 +40,34 @@ console.info('[RC AI v4.2.6] boot');
   // provider model slugs change over time — verify the current one against
   // the provider's own docs before relying on it.
   const PROVIDERS = [
+    {
+      key: 'deepseek', label: 'DeepSeek', color: '#4D6BFE',
+      webUrl: 'https://chat.deepseek.com/',
+      fields: [
+        { id: 'key', label: 'API Key', type: 'password', placeholder: 'sk-...' },
+        { id: 'model', label: 'Model', type: 'text', placeholder: 'e.g. deepseek-chat (check api-docs.deepseek.com)' },
+      ],
+      async call(prompt, cfg) {
+        if (!cfg.key) throw new Error('Missing DeepSeek API key — add it in Settings.');
+        if (!cfg.model) throw new Error('Missing DeepSeek model — add it in Settings.');
+        const res = await gmRequest({
+          method: 'POST',
+          url: 'https://api.deepseek.com/v1/chat/completions',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${cfg.key}`,
+          },
+          data: JSON.stringify({
+            model: cfg.model,
+            reasoning_effort: 'low',
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        });
+        const json = parseJson(res);
+        if (json.error) throw new Error(json.error.message || 'DeepSeek API error');
+        return (json.choices?.[0]?.message?.content || '').trim();
+      },
+    },
     {
       key: 'claude', label: 'Claude', color: '#D97706',
       webUrl: 'https://claude.ai/new',
@@ -201,7 +234,7 @@ Your job is to draft SMS replies to patient text messages on behalf of the medic
 <standard_templates>
 Use these proven templates when the situation matches. Keep the required elements; adapt the wording to the thread.
 
-1. **Tracking notification** — must include: patient name, tracking number, a note that tracking may take 1-2 business days to update, a note that multi-pharmacy orders get separate tracking texts from different numbers, the dosing schedule, the full dosing guide link, and a sign-off.
+1. **Tracking notification** — must include: patient name, tracking number, a note that tracking may take 1-2 business days to update, a note that multi-pharmacy orders get separate tracking texts from different numbers, the dosing schedule, the full dosing guide link, and a sign-off, and if there is any delay, a brief neutral note that dispatch timing is handled on the pharmacy's side — the clinic follows it on their end and cannot speed up the pharmacy's shipping process (imply, don't complain).
 
 2. **Labs/exam "No to both" follow-up** — when a patient declined both the physical exam and labs: tell them the providers likely can't approve a prescription without a physical exam or labs completed within the past 12-24 months.
 
@@ -210,19 +243,23 @@ Use these proven templates when the situation matches. Keep the required element
 4. **Onboarding for paperwork-avoidant patients** — proactively complete their intake for them; the message only asks for the ID upload, and frame it as "we did this for you," never as if they're behind or annoying.
 
 5. **New patient profile creation** — always tell the patient to expect an email with a secure link to upload their ID for identity verification.
+
+6. **Peptides arrived warm / not cool upon arrival** — reassure with confidence: the peptides are reconstituted by the pharmacy before transit and ship with ice packs, so they were cold for the majority of transit. If they arrived warm with melted ice packs, that means only the later stages of transit were at room temperature — and the 48-hour clock only starts ticking from that point. So the peptides have barely been at room temperature at all, and remain perfectly fine for up to 48 hours at room temperature as long as they were not in direct heat or sunlight. Never plant seeds of doubt (no 'should be okay but', no hedging, no suggesting a replacement unless the patient describes actual damage). The goal is to prevent unnecessary replacements and refunds. If the order had to be rerouted because of a timing change, frame the clinic as having covered the pharmacy's shipping gap — the dispatch timing shifted on the pharmacy's side, and we rerouted through our clinic to keep the peptides cold. The clinic is the one watching out for the patient; the pharmacy's shipping schedule is out of our hands. If a clarifying follow-up question is needed (e.g. how long the package sat out), frame it with: the pharmacy typically asks these kinds of questions before they investigate on their end, and we want to give them full context.
+
+7. **BUD (beyond-use date) question** — explain that the 3-month BUD is for pharmacy-side compliance only. Dr. Jones intentionally sends the full amount of peptides, so some vials may hit the BUD slightly; degradation studies show peptides do not start degrading until 5 months, so the medication remains fully effective past the label date. Confident, simple framing; do not invite doubt or offer a replacement/refund — this is expected and safe.
 </standard_templates>
 
 <routing_logic>
 Apply these rules in priority order:
 
-1. **Default: search before answering**
-If the question involves any pharmacology, drug mechanism, side effect, interaction, or clinical fact — run a web search first. Do not answer from training data alone, even if you're confident. Keep the reply patient-friendly; don't dump scientific language on them. If search results are ambiguous or conflicting, flag for Heather before sending.
+1. **Default: pharmacology and clinical facts**
+If the question involves any pharmacology, drug mechanism, side effect, interaction, or clinical fact — answer from your own knowledge. Keep the reply patient-friendly; don't dump scientific language on them. If you are unsure or the facts are ambiguous or conflicting, flag for Heather before sending.
 
-2. **Clinical questions** (side effects, symptoms, medication interactions, lab concerns, new health issues) — Search and verify first. If the symptom is common and well-documented, reassure clinically in plain language. If it sounds serious, unusual, or patient-specific, flag clearly for review before sending. Also create an SMS for Heather to ask her just in case she happens to know an answer.
+2. **Clinical questions** (side effects, symptoms, medication interactions, lab concerns, new health issues) — If the symptom is common and well-documented, reassure clinically in plain language. If it sounds serious, unusual, or patient-specific, flag clearly for review before sending. Also create an SMS for Heather to ask her just in case she happens to know an answer.
 
-3. **Plateau / non-responder complaints** ("it stopped working," "I'm not losing weight anymore") — Normalize it pharmacologically based on search-verified info (e.g., adaptation phase, tolerance patterns). If it's lifestyle/compliance-related, point them toward their coach. If it sounds like a dose adequacy question, note in the draft that a provider check-in may be warranted — but do NOT suggest a dose change.
+3. **Plateau / non-responder complaints** ("it stopped working," "I'm not losing weight anymore") — Normalize it pharmacologically (e.g., adaptation phase, tolerance patterns). If it's lifestyle/compliance-related, point them toward their coach. If it sounds like a dose adequacy question, note in the draft that a provider check-in may be warranted — but do NOT suggest a dose change.
 
-4. **Missed or wrong dose** — Search for the specific medication's guidance before drafting. For most GLP-1s the answer is standard (skip, don't double up, resume next scheduled dose) but verify per drug. Flag if anything is ambiguous.
+4. **Missed or wrong dose** — For most GLP-1s the answer is standard (skip, don't double up, resume next scheduled dose). Flag if anything is ambiguous.
 
 5. **Scheduling, refills, shipping, or admin questions** — Answer directly if context is available. If not, let the patient know the team will follow up and flag what's missing.
 
@@ -234,7 +271,7 @@ If the question involves any pharmacology, drug mechanism, side effect, interact
 
 9. **Urgent or emergency language** (chest pain, difficulty breathing, suicidal ideation, severe reactions) — Do NOT draft a casual reply. Flag at the top: ⚠️ URGENT — REVIEW BEFORE SENDING. Draft a reply directing them to call 911 or go to the nearest ER immediately.
 
-10. **Shipment or delivery complaints** (damaged product, leakage, missing items, wrong medication, temperature excursions, delays) — DO NOT escalate to the pharmacy right away. Triage first (see <standing_rules> #4): (1) understand the situation from the thread, (2) ask clarifying questions if needed, (3) determine whether it's a legitimate problem or just an observation (e.g. arrived at room temperature with one cold pack, dispenser not leaking), (4) only escalate or offer a replacement once a real, unresolvable issue is confirmed. Education/reassurance may resolve it without any escalation. Be extra cautious if that order already had one replacement. Only once a real issue is confirmed: flag at the top 📦 PHARMACY ACTION REQUIRED and draft the escalation email using the format in <pharmacy_email_format>.
+10. **Shipment or delivery complaints** (damaged product, leakage, missing items, wrong medication, temperature excursions, delays) — DO NOT escalate to the pharmacy right away. Triage first (see <standing_rules> #4): (1) understand the situation from the thread, (2) ask clarifying questions if needed, (3) determine whether it's a legitimate problem or just an observation (e.g. arrived at room temperature with one cold pack, dispenser not leaking), (4) only escalate or offer a replacement once a real, unresolvable issue is confirmed. Education/reassurance may resolve it without any escalation. Be extra cautious if that order already had one replacement. Only once a real issue is confirmed: flag at the top 📦 PHARMACY ACTION REQUIRED and draft the escalation email using the format in <pharmacy_email_format>. Patient-facing replies must never plant ideas: do not list damage types or warning signs for the patient to check for (no leaking, cracks, broken vials, missing items), and do not tell them to watch out for anything. React only to what the patient actually reported.
 
 <pharmacy_email_format>
 Flag line: 📦 PHARMACY ACTION REQUIRED — include this above the SMS drafts so it's seen immediately.
@@ -287,7 +324,11 @@ Cross-cutting rules that apply to every reply.
 
 3. **Intake paperwork follow-up** — confirm patients who haven't completed intake are actually being messaged about it; don't assume it's handled. If a patient's intake looks incomplete, make sure the draft includes the follow-up.
 
-4. **Complaint / escalation handling (do not escalate to the pharmacy right away)** — before opening a new case with the pharmacy, gather more information first, especially when the complaint may be an observation rather than a real problem. Be more cautious if there's already been one replacement on that order — avoid unnecessary back-and-forth with the pharmacy. Process: (1) understand the situation, (2) ask clarifying questions if needed, (3) determine if it's a legitimate issue or just an observation, (4) only escalate or offer a replacement once a real, unresolvable issue is confirmed. Education/reassurance may resolve it without escalating. Goal: give patients excellent, supportive service while also protecting the company from unnecessary escalations, replacements, and costs — don't jump straight to "make it right" mode before confirming there's something to fix.
+4. **Complaint / escalation handling (do not escalate to the pharmacy right away)** — before opening a new case with the pharmacy, gather more information first, especially when the complaint may be an observation rather than a real problem. Be more cautious if there's already been one replacement on that order — avoid unnecessary back-and-forth with the pharmacy. Process: (1) understand the situation, (2) ask clarifying questions if needed — when asking, always add a brief framing line that the questions give the pharmacy full context, since the pharmacy typically asks these kinds of questions before they investigate on their end, and answering now means the pharmacy will not chase the patient with more follow-ups later (this keeps frustration directed at the pharmacy's process, never at the clinic), (3) determine if it's a legitimate issue or just an observation, (4) only escalate or offer a replacement once a real, unresolvable issue is confirmed. Education/reassurance may resolve it without escalating. Goal: give patients excellent, supportive service while also protecting the company from unnecessary escalations, replacements, and costs — don't jump straight to "make it right" mode before confirming there's something to fix.
+
+5. **Replacement / refund prevention (no seeds of doubt)** — when reassuring patients about peptide condition or BUD dates, be confident and definitive. Never introduce uncertainty, hedging, or hypothetical problems the patient did not raise. Never give the patient ideas about what could be wrong: do not enumerate damage types or warning signs (never mention leaking, cracks, broken vials, missing items, or anything similar), never tell them what to watch out for, and never invite them to inspect or re-check the product for problems. If the patient says everything looks fine, treat it as fine. Only address problems the patient explicitly described. Unnecessary replacements and refunds cost the company — only offer them when a real, confirmed issue exists.
+
+6. **Attribution default (logistics and process friction)** — when a reply explains a delay, shipping, tracking, or paperwork question, the cause sits with the pharmacy's process (packing, dispatch, tracking, forms) unless the truth clearly says otherwise. The clinic team is the fixer, never the cause: never imply the clinic dropped the ball, never blame the patient, never disparage the medication itself. Convey this by implication and deflection in warm, professional language — no direct accusations, no negativity toward the pharmacy as a business.
 </standing_rules>
 
 <tone_guidance>
@@ -580,6 +621,14 @@ Draft a reply to the patient's most recent message.`;
         <button class="rc-ai-choice-tab" data-tab="slack">💬 Slack <span class="rc-ai-tab-badge" id="rc-ai-slack-count">0</span></button>
       </div>
       <div class="rc-ai-choice-list" id="rc-ai-choice-list"></div>
+      <div id="rc-ai-tweak-row" style="display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--ds-border,#E4E7EC);">
+        <div style="font-size:12px; color:var(--ds-muted,#98A2B3); margin-bottom:6px;">✏️ Message needs tweaking? Tell the AI what to change and it will redraft.</div>
+        <div style="display:flex; gap:8px;">
+          <input id="rc-ai-tweak-input" type="text" placeholder="e.g. make it shorter, less formal, more reassuring…" style="flex:1; min-width:0; padding:6px 10px; border:1px solid var(--ds-border,#E4E7EC); border-radius:6px; font-size:13px; background:var(--ds-surface,#FFFDF9); color:var(--ds-text,#2B2620);">
+          <button id="rc-ai-tweak-btn" type="button" style="padding:6px 12px; border:none; border-radius:6px; background:var(--ds-accent,#8A5F2E); color:var(--ds-accent-text,#FFFFFF); font-size:13px; cursor:pointer; white-space:nowrap;">Redraft</button>
+        </div>
+        <div id="rc-ai-tweak-undo" style="display:none; margin-top:6px;"><a href="javascript:void(0)" style="font-size:12px; color:var(--ds-info,#2C6E9C); text-decoration:none;">↩ Undo last revision</a></div>
+      </div>
     </div>
   `;
   document.body.appendChild(choiceOverlay);
@@ -819,7 +868,7 @@ Draft a reply to the patient's most recent message.`;
 
   function buildPromptFromHarvest() {
     const msgs = [...harvested.values()].sort((a, b) => Number(a.id) - Number(b.id));
-    if (msgs.length === 0) return null;
+    if (msgs.length === 0 && !contextArea.value.trim()) return null;
 
     let lastSender = '';
     msgs.forEach((m) => {
@@ -842,7 +891,7 @@ Draft a reply to the patient's most recent message.`;
     return {
       prompt: PROMPT_TEMPLATE
         .replace('{{PATIENT_NAME}}', patientName)
-        .replace('{{MESSAGES}}', lines.join('\n'))
+        .replace('{{MESSAGES}}', msgs.length ? lines.join('\n') : '(no conversation messages available — drafting from context only)')
         .replace('{{CONTEXT_BLOCK}}', contextBlock),
       count: msgs.length,
       patientName,
@@ -946,6 +995,15 @@ Draft a reply to the patient's most recent message.`;
   }
 
   function showChoiceModal(rawText) {
+    // Tweak row: offer redrafting only when a previous generation exists. Always
+    // start with a blank input and no undo link on a fresh modal render.
+    const tweakRow = choiceOverlay.querySelector('#rc-ai-tweak-row');
+    const tweakInput = choiceOverlay.querySelector('#rc-ai-tweak-input');
+    const tweakUndo = choiceOverlay.querySelector('#rc-ai-tweak-undo');
+    if (tweakRow) tweakRow.style.display = lastGen ? 'block' : 'none';
+    if (tweakInput) tweakInput.value = '';
+    if (tweakUndo) tweakUndo.style.display = 'none';
+
     const smsOptions = extractReplyOptions(rawText);
     const emailContent = extractEmailContent(rawText);
     const slackNotes = extractSlackNotes(rawText);
@@ -1135,6 +1193,10 @@ Draft a reply to the patient's most recent message.`;
   });
 
   let busy = false;
+  // Last successful API generation, backing the "tweak the draft" redraft feature.
+  // Shape: { providerKey, prompt, output }. Assigned ONLY on a successful
+  // provider.call — a failed call must leave it untouched.
+  let lastGen = null;
   const LAST_PROVIDER_KEY = 'rc_ai_last_provider';
 
   // API mode: call the provider directly, then show the reply options as pop-up cards.
@@ -1143,6 +1205,7 @@ Draft a reply to the patient's most recent message.`;
     const cfg = providerConfig(provider);
     const reply = await provider.call(result.prompt, cfg);
     if (!reply) throw new Error('Empty response from the API.');
+    lastGen = { providerKey: provider.key, prompt: result.prompt, output: reply };
     showChoiceModal(reply);
     setStatus(`✅ Draft ready from ${provider.label}.`);
   }
@@ -1175,7 +1238,7 @@ Draft a reply to the patient's most recent message.`;
           await scrollAndHarvestAll();
           const result = buildPromptFromHarvest();
           if (!result) {
-            setStatus('⚠️ No messages found. Is a conversation open?', '#FF9800');
+            setStatus('⚠️ Nothing to draft from — open a conversation or add context in the panel first.', '#FF9800');
             return;
           }
           if (apiReady) {
@@ -1197,6 +1260,60 @@ Draft a reply to the patient's most recent message.`;
     });
   }
   renderProviderButtons();
+
+  // ── Redraft: revise the last generation through the SAME provider. ──
+  // Wired once; guarded against double-fires by the button's disabled state.
+  let undoPrev = null;
+  const tweakInput = choiceOverlay.querySelector('#rc-ai-tweak-input');
+  const tweakBtn = choiceOverlay.querySelector('#rc-ai-tweak-btn');
+  const tweakUndo = choiceOverlay.querySelector('#rc-ai-tweak-undo');
+
+  tweakBtn.addEventListener('click', async () => {
+    if (tweakBtn.disabled || !lastGen) return;
+    const tweak = tweakInput.value.trim();
+    if (!tweak) {
+      setStatus('⚠️ Type what you want changed first.', '#FF9800');
+      return;
+    }
+    tweakBtn.disabled = true;
+    tweakBtn.textContent = 'Redrafting…';
+    try {
+      const provider = PROVIDERS.find((p) => p.key === lastGen.providerKey);
+      if (!provider) throw new Error(`Provider ${lastGen.providerKey} is no longer available.`);
+      const revisedPrompt =
+        lastGen.prompt +
+        '\n\n<revision_request>\nThe medical team member reviewed the previous drafts and wants one revision before sending.\n\nRevision requested: ' +
+        tweak +
+        '\n\nPrevious drafts:\n' +
+        lastGen.output +
+        '\n\nRe-draft the replies applying this revision. Follow ALL the same rules above (<reply_rules>, <standard_templates>, <routing_logic>, <standing_rules>, <tone_guidance>). Keep the same output structure. Only output the revised drafts.\n</revision_request>';
+      const cfg = providerConfig(provider);
+      const reply = await provider.call(revisedPrompt, cfg);
+      if (!reply) throw new Error('Empty response from the API.');
+      const prev = lastGen.output;
+      undoPrev = prev;
+      lastGen.output = reply;
+      showChoiceModal(reply);
+      tweakUndo.style.display = 'block';
+      setStatus('✅ Redrafted — revision applied.');
+    } catch (err) {
+      console.error('[RC AI] redraft error:', err);
+      setStatus(`⚠️ ${err.message}`, 'var(--ds-danger,#B42318)', true);
+    } finally {
+      tweakBtn.disabled = false;
+      tweakBtn.textContent = 'Redraft';
+    }
+  });
+
+  tweakUndo.querySelector('a').addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!undoPrev || !lastGen) return;
+    lastGen.output = undoPrev;
+    undoPrev = null;
+    tweakUndo.style.display = 'none';
+    showChoiceModal(lastGen.output);
+    setStatus('↩ Reverted to the previous drafts.');
+  });
 
   panel.querySelector('#rc-ai-clear-btn').addEventListener('click', () => {
     contextArea.value = '';

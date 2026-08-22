@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GHL Conversation Context Extractor
 // @namespace    https://drjonesdc.com/
-// @version      1.8.5
+// @version      1.8.16
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  One-click GHL conversation extractor (SMS/calls/transcripts/emails) to XML/JSON
@@ -17,7 +17,21 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[GHL-Ctx v1.8.5] boot');
+console.info('[GHL-Ctx v1.8.16] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['GHL'] = {
+  name: 'GHL Conversation Context Extractor',
+  version: '1.8.16',
+  state: 'idle',
+  message: '',
+  progress: null,
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -57,11 +71,15 @@ console.info('[GHL-Ctx v1.8.5] boot');
     //   with GHL's own internal render timers (often 100/200/500ms).
     // LOAD_FETCH_WAIT_MS: 1000ms gives the network request time to return and the DOM
     //   to update before we declare the round "no growth".
-    // LOAD_NO_GROWTH_ROUNDS: 10 consecutive empty rounds ensures we don't stop prematurely
-    //   if a batch is just slow to render.
+    // LOAD_IDLE_BREAK_MS: break only after this much wall-clock time passes with NO
+    //   scrollHeight growth AND no visible loader. The sweep jitter (500px down/up)
+    //   triggers virtualizer batch fetches immediately — full thread materializes
+    //   in ~5s — so 30s of continuous no-growth means we're genuinely done.
+    //   A round-count budget (10 rounds ≈ 13–25s) races with batch gaps and stops
+    //   early (v1.8.8 flake).
     const LOAD_POLL_MS         = 369;
     const LOAD_FETCH_WAIT_MS   = 1000;
-    const LOAD_NO_GROWTH_ROUNDS = 10;
+    const LOAD_IDLE_BREAK_MS   = 75000;
     const LOAD_MAX_ROUNDS      = 420;
 
     // DOCUMENTS PANEL (file download) constants.
@@ -426,6 +444,8 @@ console.info('[GHL-Ctx v1.8.5] boot');
         toggle.innerHTML = '<span class="gx-toggle-emoji">⏹</span><span class="gx-toggle-label">Stopping…</span>';
         toggle.title = 'Stopping extraction…';
         showToast('Stopping… (finishing current step)', 'error', 3000);
+        const api = window.__scripts['GHL'];
+        api.state = 'idle'; api.message = 'Stopped'; api.lastActivity = Date.now();
     }
 
     // Toggle Logic — click starts extraction, or stops it while running.
@@ -472,6 +492,44 @@ console.info('[GHL-Ctx v1.8.5] boot');
 
     function clean(str) {
         return (str || '').replace(/\s+/g, ' ').trim();
+    }
+
+    // Full email body from a mail card: v2 renders most bodies inside an
+    // iframe srcdoc (parse it into text); the first card of a chain is inline.
+    // Falls back to the preview span when no body container is found.
+    function readEmailBody(card) {
+        const iframe = card.querySelector('iframe[srcdoc]');
+        if (iframe) {
+            const srcdoc = iframe.getAttribute('srcdoc') || '';
+            if (srcdoc.trim()) {
+                const doc = new DOMParser().parseFromString(srcdoc, 'text/html');
+                doc.querySelectorAll("style, script").forEach(el => el.remove());
+                const bodyEl = doc.body || doc.documentElement;
+                const text = bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '';
+                if (text.trim()) return clean(text);
+            }
+        }
+        // Inline body (first card of a chain, or non-iframe renders): the
+        // deepest text element inside the card that isn't the clamped preview
+        // span / sender row / timestamp.
+        let best = null;
+        let bestLen = 0;
+        const walker = document.createTreeWalker(card, NodeFilter.SHOW_ELEMENT);
+        let el;
+        while ((el = walker.nextNode())) {
+            if (el.tagName === 'IFRAME' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
+            if ((el.className || '').toString().includes('line-clamp')) continue;
+            if ((el.className || '').toString().includes('font-medium') && (el.className || '').toString().includes('h-[')) continue;
+            const t = (el.textContent || '').trim();
+            if (t.length > bestLen && el.children.length < 6) {
+                bestLen = t.length;
+                best = el;
+            }
+        }
+        const txt = best ? clean(best.textContent) : '';
+        if (txt) return txt;
+        const previewEl = card.querySelector('.line-clamp-1, .text-gray-600.truncate');
+        return clean(previewEl && previewEl.innerText);
     }
 
     // The scrollable column that holds the messages.
@@ -592,6 +650,62 @@ console.info('[GHL-Ctx v1.8.5] boot');
         return lineCount();
     }
 
+    async function expandEmailChains() {
+        let clicks = 0;
+        for (let i = 0; i < 30; i++) {
+            const pills = [...document.querySelectorAll('.message-item[data-message-id] [id^="conv-mail-thread-count-button"]')]
+                .filter(p => p.offsetParent !== null);
+            if (!pills.length) break;
+            pills.forEach(p => { try { p.click(); } catch (e) {} });
+            clicks += pills.length;
+            await sleep(3000);
+            if (shouldStop) break;
+        }
+        return clicks;
+    }
+
+    async function expandEmailCardBodies() {
+        // v1.8.14: single (non-chain) email cards render COLLAPSED - the full body
+        // only materializes after a synthetic click on the card header (the click
+        // is a TOGGLE, so cards that already have an iframe[srcdoc] or an inline
+        // body are never clicked). Chain cards expanded by pill clicks already
+        // carry iframe[srcdoc] or inline bodies and are skipped here.
+        const cards = [...document.querySelectorAll('[data-email-id]')];
+        let clicked = 0;
+        for (const card of cards) {
+            if (card.querySelector('iframe[srcdoc]')) continue;
+            if (hasSubstantialInlineBody(card)) continue;
+            const parent = card.parentElement;
+            if (parent && parent.querySelectorAll("[data-email-id]").length > 1) continue;
+            const header = card.querySelector('.cursor-pointer') || card;
+            header.click();
+            clicked++;
+            await sleep(1200); // let the body render before harvest reads it
+        }
+        if (clicked) console.log('[GHL-Ctx] email card expansions:', clicked);
+    }
+
+    function hasSubstantialInlineBody(card) {
+        // True when the card already contains a real body as inline text (chain
+        // first cards). Counts text-node characters OUTSIDE .line-clamp subtrees
+        // (the clamped preview must not count); sender/time rows are short, so a
+        // collapsed single card stays well under the 400-char threshold.
+        let total = 0;
+        const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            let p = node.parentElement;
+            let inClamp = false;
+            while (p && p !== card) {
+                if ((p.className || '').toString().includes('line-clamp')) { inClamp = true; break; }
+                p = p.parentElement;
+            }
+            if (inClamp) continue;
+            total += (node.textContent || '').trim().length;
+        }
+        return total > 400;
+    }
+
     async function expandAndLoadVisibleTranscripts() {
         const visibleCalls = [...document.querySelectorAll('.message-item[data-message-id]')]
             .filter(n => n.querySelector('button[id^="toggle-transcript-btn-"]'));
@@ -611,48 +725,59 @@ console.info('[GHL-Ctx v1.8.5] boot');
         return 0;
     }
 
-    async function loadEntireHistory(sc, onProgress) {
+    async function loadEntireHistory(sc, onProgress, onHarvestStep) {
         const messageCount = () =>
             document.querySelectorAll('.message-item[data-message-id]').length;
 
         let rounds = 0;
-        let noGrowth = 0;
-        let lastMin = minDataIndex();
-        if (lastMin == null) lastMin = Infinity;
+        let lastSh = sc.scrollHeight;
+        let lastGrowthAt = Date.now();
 
         while (rounds < LOAD_MAX_ROUNDS) {
             if (shouldStop) break;
+            // Sweep jitter at the top: v2 virtualizer ignores sub-pixel scrolls
+            // (0/1/0 jitter = no batch fetches), but a 500px down/up sweep
+            // triggers the older-batch load reliably (sweep test: full thread
+            // materialized in 4 rounds vs zero growth from 75s of 1px jitter).
             sc.scrollTop = 0;
             await sleep(80);
-            sc.scrollTop = 1;
-            await sleep(80);
+            sc.scrollTop = Math.min(500, sc.scrollHeight);
+            await sleep(150);
             sc.scrollTop = 0;
+            await sleep(80);
 
             const waitStart = Date.now();
             let grew = false;
             while (Date.now() - waitStart < LOAD_FETCH_WAIT_MS && !shouldStop) {
-                const cur = minDataIndex();
-                if (cur != null && cur < lastMin) {
-                    lastMin = cur;
+                const sh = sc.scrollHeight;
+                // v2 virtualizer: only a window of items is mounted and index 0
+                // can exist from the first mount, so the v1 "min index
+                // decreases" signal alone never fires reliably. Robust growth
+                // signal = scrollHeight grew (new batches materialized).
+                if (sh > lastSh) {
+                    lastSh = sh;
                     grew = true;
                     break;
                 }
                 await sleep(LOAD_POLL_MS);
             }
-
-            sc.scrollTop = 0;
-
-            if (grew) {
-                noGrowth = 0;
-            } else if (!isLoadingMore(sc)) {
-                noGrowth++;
+            if (sc.scrollHeight > lastSh) {
+                lastSh = sc.scrollHeight;
+                grew = true;
             }
+
+            if (grew) lastGrowthAt = Date.now();
 
             rounds++;
             if (onProgress) onProgress(messageCount(), rounds);
 
-            const flooredAndIdle = (lastMin === 0) && !isLoadingMore(sc);
-            if (noGrowth >= LOAD_NO_GROWTH_ROUNDS && (flooredAndIdle || noGrowth >= LOAD_NO_GROWTH_ROUNDS + 2)) {
+            // Time-based idle break: only stop after LOAD_IDLE_BREAK_MS of
+            // continuous no-growth. Round-count budgets race with batch gaps
+            // and stop too early (v1.8.8 flake). Do NOT walk during the load —
+            // a merged walk re-triggers newer-batch loads below the spacer and
+            // growth never stops (v1.8.11 infinite-loop flake); the harvest
+            // phase is a separate bounded one-way walk.
+            if (Date.now() - lastGrowthAt >= LOAD_IDLE_BREAK_MS) {
                 break;
             }
         }
@@ -682,16 +807,22 @@ console.info('[GHL-Ctx v1.8.5] boot');
                 const data = classifyAndExtract(node);
                 if (!data) return;
 
-                const existing = messages.get(id);
+                // Email chains: classifyAndExtract may return MULTIPLE entries
+                // (one per [data-email-id] mail card inside the collapsed thread).
+                const list = Array.isArray(data) ? data : [data];
+                list.forEach((entry, i) => {
+                    const key = list.length > 1 ? `${id}#${i}` : id;
+                    const existing = messages.get(key);
 
-                if (!existing) {
-                    messages.set(id, { idx: indexOfNode(node), data });
-                    return;
-                }
+                    if (!existing) {
+                        messages.set(key, { idx: indexOfNode(node), data: entry });
+                        return;
+                    }
 
-                if (transcriptLineCount(data) > transcriptLineCount(existing.data)) {
-                    messages.set(id, { idx: existing.idx, data });
-                }
+                    if (transcriptLineCount(entry) > transcriptLineCount(existing.data)) {
+                        messages.set(key, { idx: existing.idx, data: entry });
+                    }
+                });
             });
         };
 
@@ -699,15 +830,22 @@ console.info('[GHL-Ctx v1.8.5] boot');
             if (shouldStop) return;
             if (isLoadingMore(sc)) await sleep(200);
             if (shouldStop) return;
+            await expandEmailChains();
+            await expandEmailCardBodies();
+            if (shouldStop) return;
             transcriptsOpened += await expandAndLoadVisibleTranscripts();
             harvestVisible();
         };
 
-        // ── STEP 1: LOAD PHASE ──
+        // ── STEP 1: LOAD PHASE (walks + harvests in the same pass) ──
+        // harvestStep rides along with every scroll position: the virtualizer
+        // unmounts items outside the viewport, so harvest must happen while
+        // scrolling. Each round walks top→bottom (harvesting), then returns to
+        // top (which triggers the older-batch load); repeats until growth stops.
         if (typeof harvestWholeThread._onLoadProgress === 'function') {
-            await loadEntireHistory(sc, harvestWholeThread._onLoadProgress);
+            await loadEntireHistory(sc, harvestWholeThread._onLoadProgress, settleAndHarvest);
         } else {
-            await loadEntireHistory(sc);
+            await loadEntireHistory(sc, null, settleAndHarvest);
         }
 
         await sleep(300);
@@ -723,7 +861,10 @@ console.info('[GHL-Ctx v1.8.5] boot');
             pos += step;
             if (pos > sc.scrollHeight) pos = sc.scrollHeight;
             sc.scrollTop = pos;
-            await sleep(150);
+            // v2 virtualizer mounts windows lazily; 150ms can outrun it on slow
+            // networks and skip windows. 800ms lets each window mount before
+            // harvest (v1.8.8 flake).
+            await sleep(800);
             await settleAndHarvest();
 
             const atBottom = (sc.scrollTop + sc.clientHeight) >= (sc.scrollHeight - 4);
@@ -855,15 +996,50 @@ console.info('[GHL-Ctx v1.8.5] boot');
         // ── EMAIL ──
         if (isEmailCard) {
             const subjEl = item.querySelector('#conv-mail-thread-header span.text-gray-900, #conv-mail-thread-header .truncate');
-            const fromEl = item.querySelector('.text-gray-900.truncate');
+            const subject = clean(subjEl && subjEl.textContent);
+
+            // v2 email CHAINS: a single message-item may hold the whole thread as
+            // multiple [data-email-id] mail cards, collapsed behind a
+            // "+N messages earlier" pill (expandEmailChains expands them before
+            // harvest). Emit one entry per mail card so long chains survive.
+            const mailCards = [...item.querySelectorAll('[data-email-id]')];
+            if (mailCards.length > 1) {
+                // DOM renders the chain newest-first (pill sits above the older
+                // batch); reverse so the output reads oldest→newest like the
+                // rest of the thread.
+                return mailCards.reverse().map(card => {
+                    // v2 (2026-08): sender is a small fixed-height span inside the mail card;
+                    // plain `.text-gray-900.truncate` now matches the SUBJECT first, so scope to the sender row.
+                    const fromEl = card.querySelector('span.h-\\[16px\\].text-\\[14px\\].font-medium');
+                    const previewEl = card.querySelector('.line-clamp-1, .text-gray-600.truncate');
+                    const tsEl = card.querySelector('.text-md.text-gray-600 span, .text-gray-600.cursor-default span');
+                    return {
+                        type: 'email',
+                        fields: {
+                            subject,
+                            from: clean(fromEl && fromEl.textContent),
+                            preview: clean(previewEl && previewEl.innerText),
+                            // FULL BODY: iframe srcdoc / inline container (v1.8.13)
+                            body: readEmailBody(card),
+                            time: clean(tsEl && tsEl.textContent) || getTimestamp(item)
+                        }
+                    };
+                });
+            }
+
+            // v2 (2026-08): sender is a small fixed-height span inside the mail card;
+            // plain `.text-gray-900.truncate` now matches the SUBJECT first, so scope to the sender row.
+            const fromEl = item.querySelector('#conv-email-message-view span.h-\\[16px\\].text-\\[14px\\].font-medium, [datatestid="EMAIL_DETAILS"] span.h-\\[16px\\].text-\\[14px\\].font-medium');
             const previewEl = item.querySelector('.line-clamp-1, .text-gray-600.truncate');
             const tsEl = item.querySelector('.text-md.text-gray-600 span, .text-gray-600.cursor-default span');
             return {
                 type: 'email',
                 fields: {
-                    subject: clean(subjEl && subjEl.textContent),
+                    subject,
                     from: clean(fromEl && fromEl.textContent),
                     preview: clean(previewEl && previewEl.innerText),
+                    // FULL BODY: iframe srcdoc / inline container (v1.8.13)
+                    body: readEmailBody(item),
                     time: clean(tsEl && tsEl.textContent) || getTimestamp(item)
                 }
             };
@@ -1036,7 +1212,10 @@ console.info('[GHL-Ctx v1.8.5] boot');
             '[data-testid="conversation-header-name"]',
             '.conversation-header-title',
             'h2.contact-name',
-            '#conversations-detail-header .truncate'
+            '#conversations-detail-header .truncate',
+            // v2 contact-detail header (2026-08): name inside hr-text-lg + hr-ellipsis
+            'p.hr-text.hr-text-lg .hr-ellipsis span',
+            'p.hr-text.hr-text-lg'
         ];
         for (const s of sel) {
             const el = document.querySelector(s);
@@ -1102,6 +1281,7 @@ console.info('[GHL-Ctx v1.8.5] boot');
                     xml += field('from', f.from);
                     xml += field('time', f.time);
                     xml += field('preview', f.preview);
+                    xml += field('body', f.body);
                     xml += `    </email>\n`;
                     break;
 
@@ -1147,6 +1327,8 @@ console.info('[GHL-Ctx v1.8.5] boot');
         if (isRunning) return;
         isRunning = true;
         shouldStop = false;
+        const api = window.__scripts['GHL'];
+        api.state = 'running'; api.message = 'Extracting conversation...'; api.output = null; api.error = null; api.lastActivity = Date.now();
         toggle.classList.add('gx-working');
         toggle.innerHTML = '<span class="gx-toggle-emoji">⏹</span><span class="gx-toggle-label">Stop</span>';
         toggle.title = 'Click to stop extraction';
@@ -1162,6 +1344,7 @@ console.info('[GHL-Ctx v1.8.5] boot');
 
             if (shouldStop) {
                 showToast('⏹ Extraction stopped during loading', 'error', 5000);
+                api.state = 'idle'; api.message = 'Stopped during loading'; api.lastActivity = Date.now();
                 return;
             }
 
@@ -1188,13 +1371,21 @@ console.info('[GHL-Ctx v1.8.5] boot');
                 extension = 'xml';
             }
 
-            if (CONFIG.action === 'copy') {
-                if (typeof GM_setClipboard === 'function') {
-                    GM_setClipboard(content, 'text');
-                } else {
-                    await navigator.clipboard.writeText(content);
-                }
+            // ALWAYS copy to clipboard (user-mandated): every run writes output, regardless of action
+            if (typeof GM_setClipboard === 'function') {
+                GM_setClipboard(content, 'text');
             } else {
+                await navigator.clipboard.writeText(content);
+            }
+
+            // R18: expose output via the Script API
+            api.output = content;
+            api.state = 'done';
+            api.message = `Extracted ${entries.length} items`;
+            api.lastActivity = Date.now();
+
+            // Download action still downloads (AND also copies, see above)
+            if (CONFIG.action === 'download') {
                 const blob = new Blob([content], { type: mimeType });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -1265,6 +1456,8 @@ console.info('[GHL-Ctx v1.8.5] boot');
         } catch (err) {
             console.error('[GHL Extractor]', err);
             showToast('✗ Extraction failed: ' + err.message, 'error', 6000);
+            const api = window.__scripts['GHL'];
+            api.state = 'error'; api.error = err.message; api.message = 'Failed: ' + err.message; api.lastActivity = Date.now();
         } finally {
             toggle.innerHTML = '<span class="gx-toggle-emoji">📋</span><span class="gx-toggle-label">Extract</span>';
             toggle.title = 'Extract conversation context (Drag to move · Right-click for options)';
@@ -1273,5 +1466,20 @@ console.info('[GHL-Ctx v1.8.5] boot');
             shouldStop = false;
         }
     }
+
+    // R18: trigger dispatcher
+    const api = window.__scripts['GHL'];
+    api.trigger = function (action) {
+      if (action === 'extract') {
+        if (api.state === 'running') return { ok: false, error: 'already running' };
+        runExtraction();
+        return { ok: true };
+      }
+      if (action === 'stop') {
+        stopExtraction();
+        return { ok: true };
+      }
+      return { ok: false, error: `unknown action: ${action}` };
+    };
 
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UPS Tracking Copier
 // @namespace    drjones
-// @version      2.7
+// @version      2.9
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Auto-copy tracking details from UPS tracking pages
@@ -12,7 +12,21 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[UPS v2.7] boot');
+console.info('[UPS v2.9] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['UPS'] = {
+  name: 'UPS Tracking Copier',
+  version: '2.9',
+  state: 'idle',
+  message: '',
+  progress: null,
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -47,14 +61,17 @@ console.info('[UPS v2.7] boot');
   }
 
   function run() {
+    const api = window.__scripts['UPS'];
     const text = extract();
     if (!text) {
+      api.state = 'error'; api.error = 'No tracking data found'; api.message = 'No tracking data found'; api.lastActivity = Date.now();
       toast('⚠ No tracking data found', false);
       return;
     }
+    api.output = text;
+    api.state = 'done'; api.message = 'Tracking extracted'; api.lastActivity = Date.now();
     navigator.clipboard.writeText(text).then(() => {
       toast('✓ Tracking copied', true);
-      setTimeout(() => window.close(), 700);
     }).catch(() => toast('⚠ Copy failed', false));
   }
 
@@ -91,4 +108,10 @@ console.info('[UPS v2.7] boot');
   } else {
     waitAndInit();
   }
+
+  // R18: trigger dispatcher
+  window.__scripts['UPS'].trigger = function (action) {
+    if (action === 'extract') { run(); return { ok: true }; }
+    return { ok: false, error: `unknown action: ${action}` };
+  };
 })();

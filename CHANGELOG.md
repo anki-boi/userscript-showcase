@@ -8,6 +8,102 @@ Paste a CSV or JSON order row, confirm the column mapping, then auto-drive patie
 
 ---
 
+## v2.16
+
+
+
+Script API (R18) — agent-facing status/trigger/output channel (2026-08-22):
+
+
+
+- `window.__scripts['PSA']` registers `state`, `message`, `progress`,
+
+  `output`, `error`, `lastActivity`, and a `trigger(action, params)`
+
+  dispatcher (`start-row` by `_id` or first queued, `continue`, `stop`,
+
+  `reset`).
+
+- State machine: `idle -> running -> waiting_human -> done` (or `error`);
+
+  the Continue gate, multi-match pick-one, and Stop/Reset all sync into
+
+  the API object. Progress = `{current, total, step}` per row.
+
+- Version moved 2.15 -> 2.16 because the Thymosin alias commit already
+
+  took 2.15 (it landed on origin while this R18 work was in flight).
+
+
+
+---
+
+
+
+## v2.15
+
+
+
+Added `"thymosin alpha-1 inj"` to the purchase-alias map -> `[GRE]
+
+Thymosin injectable` (2026-08-22). One-line catalog addition; no flow,
+
+selector, or output changes.
+
+
+
+---
+
+## v2.13
+
+Comments only — no behavior change, not deployed to Edge (Jeyson 2026-08-18):
+
+- Added a BUSINESS CONTEXT block at the sheet column mapping explaining what
+  "Existing RxFlow Patient" really means: non-empty (e.g.
+  "YES - Do Not Resend Intake") = patient ordered before + sale already
+  created → the automator fills the questionnaire FOR them (prefill + human
+  Submit); blank = new patient → auto-skip. Emphasizes the column records
+  PRIOR-SALE status, not mere profile existence, and that it stays the single
+  source of truth for the skip decision (so future edits don't re-introduce
+  the v1.27 profile-check overwrite regression).
+
+---
+
+## v2.12
+
+Auto-skip decision restored to the sheet column as the single source of truth
+(Jeyson 2026-08-18 — "if the column is non-empty, do not auto-skip"):
+
+- **Bug**: since v1.27 the profile-check pass force-flagged every found row
+  `existingPatient = "TRUE"`, so rows whose sheet "Existing RxFlow
+  Patient" column was BLANK stopped auto-skipping the questionnaire — they
+  took the existing-patient prefill + human-review path instead.
+- **Fix**: `applyProfileCheckResults` no longer writes `r.existingPatient`.
+  The pass still fills the patient ID (search-by-ID + queue badges) and still
+  removes no-profile rows, but the questionnaire decision in
+  `stepSelectModules` now reads ONLY the pasted column value: blank →
+  auto-skip (new patient), non-empty → prefill + human review/submit
+  (existing patient). Submission stays manual either way.
+- Version bump only otherwise — no selector, product, or flow changes.
+
+---
+
+## v2.9
+
+Peptide button remap after RxFlow list changes (2026-08-17, live-verified):
+
+- **Med-type button renamed**: `Peptide` → `Peptides`. The exact-match finder
+  timed out on every peptide add — this was why NO product (KLOW, Tesa/IPA,
+  all of them) could be found.
+- **GLOW moved to the STK brand**: `[GRE] GLOW` → `[STK] GLOW` (catalog +
+  `glow` alias).
+- **New product**: `[GRE] BPC-157/KPV/TB500` added to Healing (+ aliases
+  `bpc-157/kpv/tb500`, `bpc/kpv/tb500`).
+- Everything else (categories, all other product names) verified unchanged
+  live against a sale form.
+
+---
+
 ## v2.2
 
 Short-name purchase aliases (Jeyson's real sheet values, 2026-08-06):

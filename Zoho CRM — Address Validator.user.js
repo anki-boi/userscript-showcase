@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM — Address Validator
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      1.10
 // @description  Validates patient addresses on Zoho contacts: ZIP/city/state + street checks
 // @author       Jeyson Dagondon
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
@@ -11,7 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[AddrVal v1.9] boot');
+console.info('[AddrVal v1.10] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['AddrVal'] = { name: 'Zoho CRM — Address Validator', version: '1.10', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 // ============================================================
 // Zoho CRM — Address Validator v1.0 (2026-08-04)

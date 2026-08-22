@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RingCentral - Guard SMS Delete
 // @namespace    jeyson.rc.tools
-// @version      1.3
+// @version      1.4
 // @author       Jeyson Dagondon
 // @description  Confirm-gates or hides the per-conversation Delete in RingCentral's 3-dot menu
 // @match        https://app.ringcentral.com/*
@@ -12,7 +12,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[RC-Guard v1.3] boot');
+console.info('[RC-Guard v1.4] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['RC-Guard'] = { name: 'RingCentral - Guard SMS Delete', version: '1.4', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 (function () {
   'use strict';

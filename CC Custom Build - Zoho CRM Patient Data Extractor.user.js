@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         CC Custom Build - Zoho CRM Patient Data Extractor
 // @namespace    http://tampermonkey.net/
-// @version      1.33
+// @version      1.48
 // @description  Extract patient data from Zoho CRM: Copy Everything JSON payload + Create Order
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
+// @match        https://staff.exampleclinic.com/patient-*
 // @grant        GM.setClipboard
 // @grant        GM.getValue
 // @grant        GM.setValue
@@ -13,9 +14,28 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[CC v1.33] boot');
+console.info('[CC v1.48] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['CC'] = {
+  name: 'CC Custom Build - Zoho CRM Patient Data Extractor',
+  version: '1.48',
+  state: 'idle',
+  message: '',
+  progress: null,
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
   const __dsStyle = document.createElement('style');
-  __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
+  __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}' +
+    // v1.34: copy feedback — strong flash animation + confirmation toast
+    '.cc-copy-flash{animation:ccCopyFlash .8s ease-out}' +
+    '@keyframes ccCopyFlash{0%{background-color:var(--ds-success,#3d7a46);color:#fff}60%{background-color:#c8e6c9;color:#1f1f1f}100%{background-color:transparent;color:#1f1f1f}}' +
+    '#cc-toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:var(--ds-success,#3d7a46);color:#fff;padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:0;transition:opacity .25s;pointer-events:none;max-width:70vw;text-align:center}' +
+    '#cc-toast.show{opacity:1}';
   document.documentElement.appendChild(__dsStyle);
 
 (function() {
@@ -380,18 +400,43 @@ console.info('[CC v1.33] boot');
         return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     }
 
-    // Copy + green flash on a field card
-    function flashCopy(fieldDiv, copyValue) {
+    // v1.34: confirmation toast — "✓ Copied <label>: <value>" so a click
+    // always has visible proof (the old 300ms tint alone was too subtle).
+    let ccToastTimer = null;
+    function ccToast(msg) {
+        let el = document.getElementById('cc-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'cc-toast';
+            document.body.appendChild(el);
+        }
+        el.textContent = msg;
+        // Reflow commits the opacity:0 state, then .show transitions it in —
+        // rAF is NOT used: it never fires in background tabs, which would
+        // leave the toast text set but invisible (found via CDP testing).
+        void el.offsetWidth;
+        el.classList.add('show');
+        if (ccToastTimer) clearTimeout(ccToastTimer);
+        ccToastTimer = setTimeout(() => el.classList.remove('show'), 1600);
+    }
+
+    // Copy + strong flash + toast on a field card (v1.34: label-aware,
+    // animated green flash that fades back to the hover state).
+    function flashCopy(fieldDiv, copyValue, label) {
         GM.setClipboard(copyValue);
-        fieldDiv.style.background = '#d4edda';
-        setTimeout(() => { fieldDiv.style.background = 'var(--ds-surface2,#f5f5f5)'; }, 300);
+        fieldDiv.classList.remove('cc-copy-flash');
+        void fieldDiv.offsetWidth; // restart the animation on rapid clicks
+        fieldDiv.classList.add('cc-copy-flash');
+        setTimeout(() => fieldDiv.classList.remove('cc-copy-flash'), 900);
+        const shown = String(copyValue).length > 60 ? String(copyValue).slice(0, 60) + '…' : String(copyValue);
+        ccToast('✓ Copied ' + (label || 'value') + ': ' + shown);
     }
 
     // Copy by 1-based display position (keyboard trigger)
     function triggerCopy(position) {
         const item = copyItems[position - 1];
         if (!item) return;
-        flashCopy(item.fieldDiv, item.copyValue);
+        flashCopy(item.fieldDiv, item.copyValue, item.label);
     }
 
     function closeFloatWindow() {
@@ -546,7 +591,15 @@ console.info('[CC v1.33] boot');
         if (data.fullName) {
             const parts = data.fullName.trim().split(/\s+/);
             data.firstName = parts[0] || '';
-            data.lastName = parts.slice(1).join(' ') || '';
+            const lastNameParts = parts.slice(1);
+            data.lastName = lastNameParts.join(' ') || '';
+            // Two-word last name (e.g. "Juan Dela Cruz"): fold the first word
+            // into the first name, keep only the second word as the last name.
+            // Single-word and 3+ word last names stay unchanged.
+            if (lastNameParts.length === 2) {
+                data.firstName = (data.firstName + ' ' + lastNameParts[0]).trim();
+                data.lastName = lastNameParts[1];
+            }
         }
 
         return data;
@@ -758,11 +811,11 @@ console.info('[CC v1.33] boot');
             fieldDiv.addEventListener('mouseleave', () => fieldDiv.style.background = 'var(--ds-surface2,#f5f5f5)');
             fieldDiv.addEventListener('click', (e) => {
                 e.stopPropagation();
-                flashCopy(fieldDiv, copyValue);
+                flashCopy(fieldDiv, copyValue, labelText);
             });
             content.appendChild(fieldDiv);
 
-            copyItems.push({ fieldDiv, copyValue });
+            copyItems.push({ fieldDiv, copyValue, label: labelText });
         }
     }
 
@@ -829,6 +882,13 @@ console.info('[CC v1.33] boot');
         console.log('Copy Everything payload:', payload);
         GM.setClipboard(json);
 
+        // R18: also expose XML output via the Script API (for AI consumption)
+        const api = window.__scripts['CC'];
+        api.output = buildXmlOutput(payload);
+        api.state = 'done';
+        api.message = 'Extracted patient data';
+        api.lastActivity = Date.now();
+
         // Muted confirmation: green text + faint green tint, no solid fill
         const originalText = btn.textContent;
         btn.textContent = '✓ Copied!';
@@ -839,6 +899,31 @@ console.info('[CC v1.33] boot');
             btn.style.color = 'var(--ds-accent,#6a1b9a)';
             btn.style.background = 'transparent';
         }, 900);
+    }
+
+    // R18: build XML from the payload object (for AI consumption)
+    function buildXmlOutput(p) {
+        const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        const f = (tag, val) => val ? `  <${tag}>${esc(val)}</${tag}>\n` : '';
+        let xml = '<patient>\n';
+        xml += f('first_name', p.firstName);
+        xml += f('last_name', p.lastName);
+        if (p.dob) {
+          xml += `  <dob>${p.dob.m}/${p.dob.d}/${p.dob.y}</dob>\n`;
+        }
+        // Human-readable gender for AI
+        const gReadable = p.gender === 'f' ? 'Female' : p.gender === 'm' ? 'Male' : '';
+        xml += f('gender', gReadable);
+        xml += f('phone', p.phone);
+        xml += f('mobile', p.cell);
+        xml += f('email', p.email);
+        xml += f('address', p.address);
+        xml += f('city', p.city);
+        xml += f('state', p.stateFullName);
+        xml += f('state_abbr', p.state);
+        xml += f('zip', p.zip);
+        xml += '</patient>';
+        return xml;
     }
 
     // ========================================
@@ -1180,9 +1265,826 @@ console.info('[CC v1.33] boot');
     }
 
     // ========================================
+    // RXFLOW PATIENT-TAB EXTRACTOR (staff.exampleclinic.com)
+    // Runs ONLY on RxFlow patient pages — selectors/URL map per
+    // rxflow-patient-tabs-selectors.md (verified live 2026-08-20).
+    // Extraction only: never auto-picks or submits anything (R7), and makes
+    // zero writes to the site — the walk continuity lives in sessionStorage.
+    // ========================================
+    const PRX_TABS = [
+        { path: 'patient-details',        name: 'Details',        listKey: '' },
+        { path: 'patient-alergies',       name: 'Allergies',      listKey: 'allergies' },
+        { path: 'patient-appointments',   name: 'Appointments',   listKey: 'appointments' },
+        { path: 'patient-communication',  name: 'Communication',  listKey: 'communication' },
+        { path: 'patient-documents',      name: 'Documents',      listKey: 'documents' },
+        { path: 'patient-encounters',     name: 'Encounters',     listKey: 'encounters' },
+        { path: 'patient-medications',    name: 'Medications',    listKey: 'medications' },
+        { path: 'patient-notes',          name: 'Notes',          listKey: 'notes' },
+        { path: 'patient-labs',           name: 'Labs',           listKey: 'labs' },
+        { path: 'patient-prescriptions',  name: 'Prescriptions',  listKey: 'prescriptions' },
+        { path: 'patient-questionnaries', name: 'Questionnaires', listKey: 'questionnaires' },
+        { path: 'patient-sales',          name: 'Sales',          listKey: 'sales' }
+    ];
+    const PRX_ORDER = PRX_TABS.map(t => t.path);
+    const PRX_TAB_NAME = Object.fromEntries(PRX_TABS.map(t => [t.path, t.name]));
+    const PRX_LIST_KEY = Object.fromEntries(PRX_TABS.filter(t => t.listKey).map(t => [t.path, t.listKey]));
+    const PRX_ID_RE = /patient-(?:details|alergies|appointments|communication|documents|encounters|medications|notes|labs|prescriptions|questionnaries|sales)\/(\d+)/;
+    const PRX_WALK_KEY = 'cc-prx-walk';
+    // Copy Patient Data on a non-details tab: navigate to patient-details and
+    // resume the copy on boot (details has everything — Jeyson 2026-08-20).
+    const PRX_COPY_KEY = 'cc-prx-copy-pending';
+
+    // Identity label → payload key. Some labels pack two values ("DOB | Age"):
+    // `split` picks the piece of a "|"-separated value when one is present.
+    const PRX_IDENTITY_MAP = [
+        { re: /^patient\s*name$/i,            key: 'patientName' },
+        { re: /^patient\s*id$/i,              key: 'patientRef' },
+        { re: /^dob/i,                        key: 'dob',  split: 0 },
+        { re: /^age/i,                        key: 'age',  split: 1 },
+        { re: /^status$/i,                    key: 'status' },
+        { re: /^registered\s*date$/i,         key: 'registeredDate' },
+        { re: /^state$/i,                     key: 'state' },
+        { re: /^coach$/i,                     key: 'coach' },
+        { re: /^gender\s*at\s*birth$/i,       key: 'genderAtBirth' },
+        { re: /^gender\s*identity$/i,         key: 'genderIdentity' },
+        { re: /^language$/i,                  key: 'language' },
+        { re: /^phone\s*number$/i,            key: 'phone' },
+        { re: /^email$/i,                     key: 'email' }
+    ];
+    // Detail section heading → payload key (Shipping Address is the PREFERRED address).
+    const PRX_SECTION_MAP = [
+        { re: /^shipping\s*address/i, key: 'shippingAddress' },
+        { re: /^contact/i,            key: 'contactAddress' },
+        { re: /^basic/i,              key: 'basicInfo' },
+        { re: /^additional/i,         key: 'additionalDetails' },
+        { re: /^emergency/i,          key: 'emergencyDetails' }
+    ];
+
+    function prxSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function prxPatientId() {
+        const m = location.pathname.match(PRX_ID_RE);
+        return m ? m[1] : '';
+    }
+    function prxTabPath() {
+        const m = location.pathname.match(/\/patient-([a-z]+)\//);
+        return m ? 'patient-' + m[1] : '';
+    }
+
+    // R1: the site renders async and slowly — poll up to ~45s for the pane's
+    // content (plus the identity header, which exists on every tab) before
+    // extracting anything. Returns false on timeout / navigated away.
+    // The identity name row renders as "-" BEFORE the real value (live-caught
+    // 2026-08-20: panel title froze on "-") — never extract until it's real.
+    async function prxWaitForContent(tab) {
+        const isDetails = tab === 'patient-details';
+        const deadline = Date.now() + 45000;
+        while (Date.now() < deadline) {
+            if (!/\/patient-[a-z]+\//.test(location.pathname)) return false;
+            const hasIdentity = !!document.querySelector('.patient-header-detail .show_pat_content.pl-0');
+            if (hasIdentity && prxIdentityNameReady()) {
+                if (isDetails) {
+                    const pane = document.getElementById('patient_details');
+                    if (pane && pane.getClientRects().length > 0) return true;
+                } else if (document.querySelector('.content-wrapper .grid-container') ||
+                           document.querySelector('.content-wrapper .empty-results')) {
+                    return true;
+                }
+            }
+            await prxSleep(600);
+        }
+        return false;
+    }
+
+    // True once the Patient Name row's value is a real name, not the early
+    // placeholder ("-", "--", "Non Reported", or empty).
+    function prxIdentityNameReady() {
+        const row = [...document.querySelectorAll('.patient-header-detail .show_pat_content.pl-0')]
+            .find(r => /^patient\s*name/i.test((r.querySelector('span.title_color') || {}).textContent || ''));
+        if (!row) return false;
+        const name = Array.from(row.querySelectorAll('span'))
+            .filter(s => !s.classList.contains('title_color'))
+            .map(s => (s.textContent || '').replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+        return name.length > 0 && name !== '-' && name !== '--' && !/^non\s*reported$/i.test(name);
+    }
+
+    // Identity: label→value rows in the header card, plus the Height/BMI stats line.
+    function prxExtractIdentity() {
+        const identity = {};
+        document.querySelectorAll('.patient-header-detail .show_pat_content.pl-0').forEach(row => {
+            const labelEl = row.querySelector('span.title_color');
+            if (!labelEl) return;
+            const label = (labelEl.textContent || '').replace(/\s*:\s*$/, '').trim();
+            if (!label) return;
+            const value = Array.from(row.querySelectorAll('span'))
+                .filter(s => s !== labelEl)
+                .map(s => (s.textContent || '').replace(/\s+/g, ' ').trim())
+                .filter(Boolean)
+                .join(' ')
+                .trim();
+            if (value && !(label in identity)) identity[label] = value;
+        });
+        const header = document.querySelector('.patient-header-detail');
+        if (header) {
+            const lines = ((header.innerText || header.textContent) || '').split('\n')
+                .map(l => l.replace(/\s+/g, ' ').trim())
+                .filter(Boolean);
+            const stats = lines.find(l => l.includes('Height') && l.includes('BMI'));
+            if (stats) identity.headerStats = stats;
+        }
+        return identity;
+    }
+
+    // Details tab: sections + label/strong field rows inside #patient_details.
+    function prxParseDetailRow(row) {
+        const cols = row.querySelectorAll(':scope > div.col-md-6');
+        if (cols.length < 2) return null;
+        const label = (cols[0].textContent || '').replace(/\s+/g, ' ').trim();
+        if (!label) return null;
+        const strong = cols[1].querySelector('strong');
+        const value = strong
+            ? (strong.textContent || '').replace(/\s+/g, ' ').trim()
+            : (cols[1].textContent || '').replace(/\s+/g, ' ').trim();
+        if (!value) return null;
+        return { label, value };
+    }
+
+    function prxExtractDetails() {
+        const pane = document.getElementById('patient_details');
+        if (!pane) return {};
+        const sections = {};
+        let currentTitle = '';
+        for (const el of pane.querySelectorAll('h3.border-bottom.pb-2, div.row.pt-3')) {
+            if (el.matches('h3.border-bottom.pb-2')) {
+                currentTitle = (el.textContent || '').trim();
+            } else if (currentTitle) {
+                const parsed = prxParseDetailRow(el);
+                if (parsed) {
+                    sections[currentTitle] = sections[currentTitle] || {};
+                    sections[currentTitle][parsed.label] = parsed.value;
+                }
+            }
+        }
+        const out = {};
+        for (const [title, rows] of Object.entries(sections)) {
+            for (const { re, key } of PRX_SECTION_MAP) {
+                if (re.test(title)) { out[key] = rows; break; }
+            }
+        }
+        return out;
+    }
+
+    // Shared list grid: header items ↔ :scope > .grid-item cells per record.
+    // Skips the trailing Action cell; empty state → []. Lazy rows need scrolls.
+    async function prxExtractList() {
+        try {
+            for (let i = 0; i < 3; i++) {
+                window.scrollTo(0, document.body.scrollHeight);
+                await prxSleep(900);
+            }
+        } catch (e) { console.warn('[CC-PRX] lazy scroll', e); }
+
+        const grid = document.querySelector('.content-wrapper .grid-container');
+        if (!grid) return [];
+        if (grid.querySelector('.empty-results')) return [];
+
+        const headers = Array.from(grid.querySelectorAll('.header.adjust-columns .header-item'))
+            .map(el => (el.textContent || '').replace(/\s+/g, ' ').trim())
+            .filter(h => h.length > 0);
+
+        const records = [];
+        for (const row of grid.querySelectorAll('.grid-content')) {
+            const cells = Array.from(row.querySelectorAll(':scope > .grid-item'));
+            let cellCount = cells.length;
+            const last = cells[cells.length - 1];
+            if (last) {
+                const lastText = (last.textContent || '').replace(/\s+/g, ' ').trim();
+                if (lastText === 'Action' || last.querySelector('.btn-group, .dropdown-toggle')) cellCount--;
+            }
+            const rec = {};
+            for (let i = 0; i < headers.length && i < cellCount; i++) {
+                const value = prxCellText(cells[i]);
+                if (value) rec[headers[i]] = value;
+            }
+            if (Object.keys(rec).length) records.push(rec);
+        }
+        return records;
+    }
+
+    // Date cells stack two divs (date / time) — join with a space.
+    function prxCellText(cell) {
+        const kids = Array.from(cell.children).filter(el => el.nodeType === 1);
+        if (kids.length >= 2) {
+            const parts = kids
+                .map(k => (k.textContent || '').replace(/\s+/g, ' ').trim())
+                .filter(Boolean);
+            if (parts.length === kids.length) return parts.join(' ');
+        }
+        return (cell.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    // Wait for the current tab's pane, then collect its content. The wait can
+    // span navigation: if the user switches tabs/patients mid-wait, never
+    // harvest the new page under the old tab's key — report it instead.
+    async function prxCollectCurrentEntry() {
+        const tab = prxTabPath();
+        const pid = prxPatientId();
+        const ready = await prxWaitForContent(tab);
+        if (prxTabPath() !== tab || prxPatientId() !== pid) {
+            return { tab, kind: 'error', error: 'navigated' };
+        }
+        if (!ready) {
+            console.warn('[CC-PRX] timeout waiting for content on', tab);
+            return { tab, kind: 'error', error: 'timeout' };
+        }
+        if (tab === 'patient-details') {
+            return { tab, kind: 'details', data: prxExtractDetails() };
+        }
+        return { tab, kind: 'list', data: await prxExtractList() };
+    }
+
+    function prxMapIdentity(identity) {
+        const out = {};
+        for (const [label, raw] of Object.entries(identity)) {
+            if (label === 'headerStats') continue;
+            for (const { re, key, split } of PRX_IDENTITY_MAP) {
+                if (!re.test(label)) continue;
+                let v = String(raw).trim();
+                if (split !== undefined && v.includes('|')) {
+                    const parts = v.split('|').map(s => s.trim());
+                    v = (parts[split] || '').trim();
+                }
+                if (v && !out[key]) out[key] = v;
+                break;
+            }
+        }
+        return out;
+    }
+
+    function prxSplitName(full) {
+        if (!full) return null;
+        const parts = String(full).replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+        if (!parts.length) return null;
+        if (parts.length === 1) return { firstName: parts[0], middleName: '', lastName: '', nickname: '' };
+        return {
+            firstName: parts[0],
+            middleName: parts.slice(1, -1).join(' '),
+            lastName: parts[parts.length - 1],
+            nickname: ''
+        };
+    }
+
+    function prxNameFromBasicInfo(basicInfo) {
+        if (!basicInfo) return null;
+        const find = (re) => {
+            for (const [k, v] of Object.entries(basicInfo)) {
+                if (re.test(k)) return v;
+            }
+            return '';
+        };
+        const firstName = find(/^first\s*name$/i);
+        const middleName = find(/^middle\s*name$/i);
+        const lastName = find(/^last\s*name$/i);
+        const nickname = find(/^nickname$/i);
+        if (!firstName && !lastName && !nickname) return null;
+        return { firstName, middleName, lastName, nickname };
+    }
+
+    // Shared payload core: identity + name + patientId. Only keys with data.
+    function prxBasePayload(identity, sections) {
+        const m = prxMapIdentity(identity);
+        const payload = { source: 'rxflow' };
+        const pid = prxPatientId();
+        if (pid) payload.patientId = pid;
+        if (m.patientRef) payload.patientRef = m.patientRef;
+        const name = prxNameFromBasicInfo((sections || {}).basicInfo) || prxSplitName(m.patientName);
+        if (name) payload.name = name;
+        for (const k of ['dob', 'age', 'status', 'registeredDate', 'state', 'coach', 'genderAtBirth', 'genderIdentity', 'language', 'phone', 'email']) {
+            if (m[k]) payload[k] = m[k];
+        }
+        if (identity.headerStats) payload.headerStats = identity.headerStats;
+        return payload;
+    }
+
+    // ---------- LifeFile Patient Profile Autofill compat (2026-08-20) ----------
+    // The LifeFile new-patient form reads FLAT keys from the clipboard JSON:
+    // firstName, lastName, gender ('f'/'m'), phone, email, address, city,
+    // state (ABBR — the select's option values), zip, dob {m,d,y}. Attach a
+    // flat block under _lifeFileProfile so the SAME copied payload feeds the
+    // portal's "💉 Fill Patient Form" / Alt+F with zero logic changes there
+    // (it unwraps the block). Shipping address wins (Jeyson's rule). cell is
+    // intentionally omitted — RxFlow has no separate mobile; it glows.
+    const PRX_MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
+    // "July 07, 1992" → { m: 7, d: 7, y: 1992 } (LifeFile DOB selects), else null.
+    function prxParseDob(str) {
+        if (!str) return null;
+        const m = String(str).match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+        if (!m) return null;
+        const month = PRX_MONTHS[m[1].toLowerCase()];
+        const day = parseInt(m[2], 10);
+        const year = parseInt(m[3], 10);
+        if (!month || day < 1 || day > 31 || year < 1900 || year > 2100) return null;
+        return { m: month, d: day, y: year };
+    }
+    function prxAttachLifeFileCompat(payload) {
+        const ship = payload.shippingAddress || {};
+        const contact = payload.contactAddress || {};
+        const addr = Object.keys(ship).length ? ship : contact;
+        const flat = {};
+        const name = payload.name || {};
+        if (name.firstName) flat.firstName = name.firstName;
+        if (name.lastName) flat.lastName = name.lastName;
+        const gender = normalizeGender(payload.genderAtBirth || payload.genderIdentity);
+        if (gender) flat.gender = gender;
+        if (payload.phone) flat.phone = payload.phone;
+        if (payload.email) flat.email = payload.email;
+        if (addr['Address line 1']) flat.address = addr['Address line 1'];
+        if (addr['City']) flat.city = addr['City'];
+        if (addr['State']) {
+            const abbr = stateMap[String(addr['State']).trim().toLowerCase()];
+            flat.state = abbr || addr['State']; // abbr preferred; raw falls through to a glow
+        }
+        if (addr['Postal Code']) flat.zip = addr['Postal Code'];
+        const dob = prxParseDob(payload.dob);
+        if (dob) flat.dob = dob;
+        if (Object.keys(flat).length) payload._lifeFileProfile = flat;
+    }
+
+    // FLAT Zoho-style payload for Copy Patient Data (Jeyson 2026-08-20): SAME
+    // keys as the Zoho branch's buildPayload() — firstName, lastName,
+    // dob {m,d,y}, gender ('f'/'m'), phone (bare 10), cell, email, address,
+    // city, stateFullName (full name), state (ABBR), zip — so downstream
+    // consumers (Pharmacy J PDF filler, LifeFile portal autofill) treat
+    // RxFlow and Zoho payloads identically. cell mirrors phone
+    // (RxFlow has no separate mobile — the contact number IS the mobile;
+    // matches the Zoho shape where phone and cell are the same number).
+    // No source / patientId / nested sections / _meta — that stays with the
+    // walk (Collect All Tabs). Allergies/meds mapping: FUTURE build.
+    function prxBuildFlatPayload(payload) {
+        const lf = payload._lifeFileProfile || {};
+        const flat = {};
+        if (lf.firstName) flat.firstName = lf.firstName;
+        if (lf.lastName) flat.lastName = lf.lastName;
+        if (lf.dob) flat.dob = lf.dob;
+        if (lf.gender) flat.gender = lf.gender;
+        if (lf.phone) {
+            flat.phone = lf.phone;
+            flat.cell = lf.phone;
+        }
+        if (lf.email) flat.email = lf.email;
+        if (lf.address) flat.address = lf.address;
+        if (lf.city) flat.city = lf.city;
+        if (payload.state) flat.stateFullName = payload.state; // identity row, e.g. "California"
+        if (lf.state) flat.state = lf.state;                   // abbr, e.g. "CA"
+        if (lf.zip) flat.zip = lf.zip;
+        return flat;
+    }
+
+    // Phone: always try to produce a bare 10-digit number (Jeyson 2026-08-20).
+    // Fallback chain: header "Phone Number" → details "Mobile"/"Phone" → omit
+    // (LifeFile then glows the field rather than filling garbage).
+    function prxNormalizePhone(payload) {
+        if (!payload.phone && payload.contactAddress) {
+            payload.phone = payload.contactAddress['Mobile'] || payload.contactAddress['Phone'] || '';
+        }
+        const bare = toBareDigits(payload.phone);
+        if (bare) payload.phone = bare;
+        else delete payload.phone;
+    }
+
+    // Copy a finished payload to the clipboard with the standard toast.
+    // COMPACT single-line JSON — identical to the Zoho branch's Copy Everything
+    // (JSON.stringify without indent). One line = a small paste that never
+    // scrambles in any terminal; multiline pastes were the paste-race trigger
+    // (Jeyson 2026-08-20: "All these line breaks!").
+    function prxCopyPayload(payload) {
+        const json = JSON.stringify(payload);
+        try { GM.setClipboard(json); } catch (e) { console.warn('[CC-PRX] clipboard', e); ccToast('✗ clipboard blocked'); return; }
+        const bytes = new Blob([json]).size;
+        ccToast('✓ Copied ' + bytes + ' bytes · ' + prxFieldCount(payload) + ' fields');
+        console.log('[CC-PRX] payload', payload);
+    }
+
+    async function prxBuildSinglePayload() {
+        const tab = prxTabPath();
+        if (tab !== 'patient-details') {
+            // The details tab has everything (identity + all sections + shipping
+            // address) — auto-navigate there and resume the copy on boot
+            // (Jeyson 2026-08-20).
+            const pid = prxPatientId();
+            if (!pid) { ccToast('✗ No patient id'); return null; }
+            try { sessionStorage.setItem(PRX_COPY_KEY, '1'); } catch (e) {}
+            ccToast('→ Opening Patient Details…');
+            location.href = '/patient-details/' + pid;
+            return null;
+        }
+        const entry = await prxCollectCurrentEntry();
+        if (entry.kind === 'error' && entry.error === 'navigated') {
+            ccToast('✗ Page changed during extraction — try again');
+            return null;
+        }
+        const identity = prxExtractIdentity();
+        const sections = entry.kind === 'details' ? entry.data : null;
+        const payload = prxBasePayload(identity, sections);
+        if (sections) {
+            Object.assign(payload, sections);
+        } else {
+            const key = PRX_LIST_KEY[tab];
+            if (key) payload[key] = entry.kind === 'list' ? entry.data : { error: entry.error };
+        }
+        prxNormalizePhone(payload);
+        prxAttachLifeFileCompat(payload);
+        // FLAT output — the nested payload above is only the intermediate.
+        // Copy Patient Data ships the compact Zoho-shaped flat JSON (no source
+        // tag, no sections, no _meta) so both sources flow through the same
+        // downstream pipeline. Collect All Tabs keeps the full nested payload.
+        return prxBuildFlatPayload(payload);
+    }
+
+    function prxFieldCount(payload) {
+        let n = 0;
+        for (const [k, v] of Object.entries(payload)) {
+            if (k === '_meta') continue;
+            if (Array.isArray(v)) n += v.length;
+            else if (v && typeof v === 'object') n += Object.keys(v).length;
+            else if (v !== '' && v != null) n += 1;
+        }
+        return n;
+    }
+
+    // ---------------- walk state (sessionStorage; survives re-boot per R9) ----------------
+    function prxReadWalk() {
+        try {
+            const raw = sessionStorage.getItem(PRX_WALK_KEY);
+            if (!raw) return null;
+            const w = JSON.parse(raw);
+            if (!w || !Array.isArray(w.order) || !w.order.length || typeof w.collected !== 'object') return null;
+            return w;
+        } catch (e) { console.warn('[CC-PRX] read walk', e); return null; }
+    }
+    function prxSaveWalk(w) {
+        try { sessionStorage.setItem(PRX_WALK_KEY, JSON.stringify(w)); }
+        catch (e) { console.warn('[CC-PRX] save walk', e); }
+    }
+    function prxClearWalk() {
+        try { sessionStorage.removeItem(PRX_WALK_KEY); }
+        catch (e) { console.warn('[CC-PRX] clear walk', e); }
+    }
+    function prxNewWalk() {
+        return { order: PRX_ORDER.slice(), idx: 0, collected: {}, startedAt: Date.now() };
+    }
+    function prxNextUncollected(walk) {
+        for (const p of walk.order) {
+            if (!walk.collected[p]) return p;
+        }
+        return null;
+    }
+
+    function prxWalkSummary(walk) {
+        const lines = [];
+        for (const p of walk.order) {
+            const e = walk.collected[p];
+            const label = PRX_TAB_NAME[p] || p;
+            if (!e) lines.push(label + ': pending');
+            else if (e.kind === 'error') lines.push(label + ': ' + e.error);
+            else if (e.kind === 'details') lines.push(label + ': details');
+            else lines.push(label + ': ' + (e.data || []).length);
+        }
+        return lines.join(' · ');
+    }
+    function prxShowWalkBanner(walk) {
+        const banner = document.getElementById('cc-prx-walk-banner');
+        if (!banner) return;
+        banner.style.display = 'inline-block';
+        banner.textContent = 'Walk in progress: tab ' + Math.min(walk.idx + 1, walk.order.length) + '/' + walk.order.length;
+    }
+    function prxSetStatus(text) {
+        const el = document.getElementById('cc-prx-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.style.display = text ? 'inline-block' : 'none';
+    }
+
+    // The walk button DOUBLES as the stop button while a walk is active
+    // (Jeyson 2026-08-20 — accidental walk start, wanted one-click halt).
+    function prxRenderWalkButton() {
+        const btn = document.getElementById('cc-prx-walk');
+        if (!btn) return;
+        const active = !!prxReadWalk();
+        btn.textContent = active ? '⏹ Stop Walk' : '🧲 Collect All Tabs';
+        btn.title = active ? 'Stop the walk now (partial summary stays in the panel)' : 'Collect all 12 tabs (~2 min)';
+        btn.style.color = active ? 'var(--ds-danger,#b3402e)' : 'var(--ds-accent,#8a5f2e)';
+        btn.style.borderColor = active ? 'var(--ds-danger,#b3402e)' : 'var(--ds-border,#e8e2d8)';
+    }
+
+    // Stop: clear the walk flag, hide the banner, keep the partial per-tab
+    // summary visible, and ensure no pending navigation fires.
+    function prxStopWalk() {
+        const walk = prxReadWalk();
+        prxClearWalk();
+        prxRenderWalkButton();
+        const banner = document.getElementById('cc-prx-walk-banner');
+        if (banner) banner.style.display = 'none';
+        const n = walk ? Object.keys(walk.collected).length : 0;
+        ccToast('⏹ Walk stopped — ' + n + '/' + (walk ? walk.order.length : 12) + ' collected');
+        if (walk) prxSetStatus(prxWalkSummary(walk));
+    }
+
+    // Extract the current tab, save it, then navigate to the next uncollected
+    // tab — or finalize once all 12 are in. Extraction only; no site writes.
+    let prxWalkBusy = false; // one advance at a time (boot continuation vs button)
+    async function prxAdvanceWalk() {
+        if (prxWalkBusy) return;
+        prxWalkBusy = true;
+        try {
+            const walk = prxReadWalk();
+            if (!walk) return;
+            const tab = prxTabPath();
+            const pid = prxPatientId();
+            let entry;
+            try {
+                entry = await prxCollectCurrentEntry();
+            } catch (e) {
+                console.error('[CC-PRX] collect failed on', tab, e);
+                entry = { tab, kind: 'error', error: 'exception' };
+            }
+            // The wait spans navigation — if the user moved on, abort the walk
+            // instead of harvesting a different page or yanking them back.
+            if (prxTabPath() !== tab || prxPatientId() !== pid || entry.error === 'navigated') {
+                prxClearWalk();
+                ccToast('walk aborted (manual navigation)');
+                return;
+            }
+            // Stop may have been clicked during the wait — the flag is gone.
+            // Bail WITHOUT saving: re-saving this stale snapshot would resurrect
+            // the cleared flag and the walk would keep navigating (live-caught
+            // 2026-08-20 in the v1.38 stop-button test).
+            if (!prxReadWalk()) return;
+            walk.collected[tab] = entry;
+            prxSaveWalk(walk);
+            prxSetStatus(prxWalkSummary(walk));
+
+            const next = prxNextUncollected(walk);
+            if (!next) { prxFinalizeWalk(walk); return; }
+            if (!pid) { prxClearWalk(); prxRenderWalkButton(); ccToast('✗ walk aborted (no patient id)'); return; }
+            walk.idx = walk.order.indexOf(next);
+            prxSaveWalk(walk);
+            ccToast('✓ Collected ' + (PRX_TAB_NAME[tab] || tab) + ' · next: ' + (PRX_TAB_NAME[next] || next));
+            setTimeout(() => {
+                // Stop may have been clicked during the collect wait — never
+                // navigate after a stop (the flag is gone).
+                const w = prxReadWalk();
+                if (!w || w.order[w.idx] !== next) return;
+                location.href = '/' + next + '/' + pid;
+            }, 350);
+        } finally {
+            prxWalkBusy = false;
+        }
+    }
+
+    // Boot continuation: verify we're still on the expected tab, else abort.
+    async function prxContinueWalk() {
+        const walk = prxReadWalk();
+        if (!walk) return;
+        const tab = prxTabPath();
+        if (walk.order[walk.idx] !== tab) {
+            prxClearWalk();
+            prxRenderWalkButton();
+            ccToast('walk aborted (manual navigation)');
+            prxSetStatus(prxWalkSummary(walk)); // keep the partial summary in the panel
+            return;
+        }
+        prxShowWalkBanner(walk);
+        await prxAdvanceWalk();
+    }
+
+    // Click handler: start/resume the walk, or STOP it if one is running.
+    async function prxStartOrResumeWalk() {
+        const tab = prxTabPath();
+        const orderIdx = PRX_ORDER.indexOf(tab);
+        if (orderIdx === -1) { ccToast('✗ Not a patient tab'); return; }
+
+        const walk = prxReadWalk() || prxNewWalk();
+        walk.idx = orderIdx; // we are here now
+        prxSaveWalk(walk);
+        prxRenderWalkButton(); // → "⏹ Stop Walk"
+        prxShowWalkBanner(walk);
+        await prxAdvanceWalk();
+    }
+
+    function prxFinalizeWalk(walk) {
+        prxClearWalk();
+        prxRenderWalkButton(); // back to "🧲 Collect All Tabs"
+        const identity = prxExtractIdentity();
+        const detailsEntry = walk.collected['patient-details'];
+        const basicInfo = (detailsEntry && detailsEntry.kind === 'details' && detailsEntry.data) ? detailsEntry.data.basicInfo : null;
+        const payload = prxBasePayload(identity, basicInfo ? { basicInfo } : null);
+        for (const p of walk.order) {
+            const e = walk.collected[p];
+            if (!e) continue;
+            const key = PRX_LIST_KEY[p];
+            if (e.kind === 'details') {
+                if (e.data) Object.assign(payload, e.data);
+            } else if (e.kind === 'list') {
+                if (key) payload[key] = e.data || [];
+            } else if (e.kind === 'error') {
+                if (key) payload[key] = { error: e.error };
+            }
+        }
+        prxNormalizePhone(payload);
+        prxAttachLifeFileCompat(payload);
+        payload._meta = {
+            source: 'rxflow',
+            collectedFrom: location.pathname,
+            allTabs: true,
+            tabs: walk.order.map(p => {
+                const e = walk.collected[p];
+                let records = 'skipped';
+                if (e) {
+                    if (e.kind === 'details') records = 'details';
+                    else if (e.kind === 'error') records = e.error;
+                    else records = (e.data || []).length;
+                }
+                return { path: p, name: PRX_TAB_NAME[p] || p, records };
+            }),
+            collectedAt: new Date().toISOString()
+        };
+        const json = JSON.stringify(payload, null, 2);
+        try { GM.setClipboard(json); } catch (e) { console.warn('[CC-PRX] clipboard', e); ccToast('✗ clipboard blocked'); }
+        const bytes = new Blob([json]).size;
+        const errs = walk.order.filter(p => walk.collected[p] && walk.collected[p].kind === 'error').length;
+        const ok = walk.order.length - errs;
+        ccToast('✓ ' + ok + '/' + walk.order.length + ' tabs collected' + (errs ? ' (' + errs + ' error)' : '') + ' — ' + bytes + ' bytes');
+        prxSetStatus(prxWalkSummary(walk));
+        console.log('[CC-PRX] walk payload', payload);
+    }
+
+    // Fixed float panel (cc-prx-* ids, warm-paper --ds tokens) on every patient tab.
+    function prxCreatePanel(tabName) {
+        const existing = document.getElementById('cc-prx-panel');
+        if (existing) existing.remove();
+        if (!document.body) return null;
+
+        // Inline button group — attached right after the "Patient Info" label
+        // in the patient header card (Jeyson 2026-08-20: no floating panels,
+        // sleek + part of the site's ecosystem). No title bar: the patient
+        // name is already right there in the header.
+        const panel = document.createElement('span');
+        panel.id = 'cc-prx-panel';
+        panel.style.cssText = `
+            display: inline-flex; align-items: center; gap: 6px;
+            margin-left: 10px; vertical-align: middle;
+            font-family: system-ui, -apple-system, sans-serif;
+        `;
+        const btnBase = `
+            padding: 3px 10px; border: 1px solid var(--ds-border, #e8e2d8);
+            border-radius: 6px; background: var(--ds-surface2, #f4f0e9);
+            color: var(--ds-text, #2b2620); font: 600 12px system-ui, sans-serif;
+            cursor: pointer; white-space: nowrap;
+        `;
+        panel.innerHTML = `
+            <button id="cc-prx-copy" type="button" style="${btnBase}">📋 Copy Patient Data</button>
+            <button id="cc-prx-walk" type="button" style="${btnBase}color: var(--ds-accent, #8a5f2e);">🧲 Collect All Tabs</button>
+            <span id="cc-prx-walk-banner" style="display:none;padding:2px 8px;border-radius:999px;background:#fff4e0;color:var(--ds-warn,#a16207);font-size:11px;font-weight:600;white-space:nowrap;"></span>
+            <span id="cc-prx-status" style="display:none;color:var(--ds-muted,#7a7163);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:440px;vertical-align:middle;"></span>
+        `;
+
+        // Attach right after the "Patient Info" label in the header card.
+        const infoSpan = document.querySelector('.patient-header-detail .card-header span.info-header');
+        const host = infoSpan ? infoSpan.parentElement : null;
+        if (host && host !== document.body) {
+            host.appendChild(panel);
+        } else {
+            // Fallback: right side of the "Patients" header row, else float.
+            const heading = [...document.querySelectorAll('.content-wrapper h1, .content-wrapper h2, .content-wrapper h3')]
+                .find(h => /^Patients/.test((h.textContent || '').trim()));
+            const row = heading ? (heading.closest('.row') || heading.parentElement) : null;
+            if (row && row !== document.body) {
+                panel.style.marginLeft = 'auto';
+                panel.style.alignSelf = 'center';
+                row.appendChild(panel);
+            } else {
+                panel.style.position = 'fixed';
+                panel.style.top = '70px';
+                panel.style.right = '16px';
+                panel.style.zIndex = '999999';
+                document.body.appendChild(panel);
+            }
+        }
+
+        const copyBtn = document.getElementById('cc-prx-copy');
+        copyBtn.addEventListener('mouseenter', () => { copyBtn.style.background = '#e9e2d4'; });
+        copyBtn.addEventListener('mouseleave', () => { copyBtn.style.background = 'var(--ds-surface2,#f4f0e9)'; });
+        copyBtn.addEventListener('click', async () => {
+            copyBtn.disabled = true;
+            try {
+                const payload = await prxBuildSinglePayload();
+                if (!payload) return; // navigating to patient-details — resumes on boot
+                prxCopyPayload(payload);
+            } catch (e) {
+                console.error('[CC-PRX] copy failed', e);
+                ccToast('✗ Copy failed — see console');
+            } finally {
+                copyBtn.disabled = false;
+            }
+        });
+
+        const walkBtn = document.getElementById('cc-prx-walk');
+        walkBtn.addEventListener('mouseenter', () => { walkBtn.style.background = '#e9e2d4'; });
+        walkBtn.addEventListener('mouseleave', () => { walkBtn.style.background = 'var(--ds-surface2,#f4f0e9)'; });
+        walkBtn.addEventListener('click', async () => {
+            walkBtn.disabled = true;
+            try {
+                if (prxReadWalk()) {
+                    prxStopWalk(); // active walk → one-click halt
+                } else {
+                    await prxStartOrResumeWalk();
+                }
+            } catch (e) {
+                console.error('[CC-PRX] walk failed', e);
+                ccToast('✗ Walk failed — see console');
+            } finally {
+                walkBtn.disabled = false;
+            }
+        });
+        prxRenderWalkButton(); // initial state: Stop if a walk is active
+
+        return panel;
+    }
+
+    // The patient header card (with the "Patient Info" label) renders ASYNC —
+    // the panel may have landed in a fallback spot (Patients row / float) at
+    // DOMContentLoaded. Re-anchor it inline after "Patient Info" once the
+    // header card is actually in the DOM.
+    async function prxReanchorPanel() {
+        for (let i = 0; i < 24; i++) { // up to ~12s — the site is slow
+            const infoSpan = document.querySelector('.patient-header-detail .card-header span.info-header');
+            const panel = document.getElementById('cc-prx-panel');
+            if (infoSpan && panel && infoSpan.parentElement && panel.parentElement !== infoSpan.parentElement) {
+                panel.style.position = '';
+                panel.style.top = '';
+                panel.style.right = '';
+                panel.style.zIndex = '';
+                panel.style.marginLeft = '';
+                panel.style.alignSelf = '';
+                infoSpan.parentElement.appendChild(panel);
+                return;
+            }
+            if (infoSpan || !panel) return;
+            await prxSleep(500);
+        }
+    }
+
+    // Copy Patient Data on a non-details tab set PRX_COPY_KEY and navigated
+    // here — finish the job: extract the details payload and copy the flat JSON.
+    async function prxResumeCopy() {
+        let flag = false;
+        try { flag = sessionStorage.getItem(PRX_COPY_KEY) === '1'; } catch (e) {}
+        if (!flag) return;
+        try { sessionStorage.removeItem(PRX_COPY_KEY); } catch (e) {}
+        if (prxTabPath() !== 'patient-details') return; // manual navigation broke the flow
+        const payload = await prxBuildSinglePayload();
+        if (payload) prxCopyPayload(payload);
+    }
+
+    // RxFlow entry point: panel + walk continuation + title warm-up.
+    async function initRxFlow() {
+        const tab = prxTabPath();
+        if (!tab) return;
+        const panel = prxCreatePanel(PRX_TAB_NAME[tab] || tab);
+        if (!panel) return;
+
+        prxReanchorPanel().catch(e => console.warn('[CC-PRX] reanchor', e));
+        prxResumeCopy().catch(e => console.error('[CC-PRX] copy resume failed', e));
+
+        const walk = prxReadWalk();
+        if (walk) {
+            if (walk.order[walk.idx] !== tab) {
+                prxClearWalk();
+                ccToast('walk aborted (manual navigation)');
+                prxSetStatus(prxWalkSummary(walk)); // partial kept in the panel
+            } else {
+                prxShowWalkBanner(walk);
+                prxContinueWalk().catch(e => console.error('[CC-PRX] walk continue failed', e));
+            }
+        }
+    }
+
+    // ========================================
     // INIT
     // ========================================
-    if (document.readyState === 'loading') {
+    // RxFlow patient pages run their own extraction module and skip ALL
+    // Zoho init (tab-bar buttons, global hotkeys, LifeFile/lab orchestration).
+    if (location.hostname === 'staff.exampleclinic.com') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => initRxFlow());
+        } else {
+            initRxFlow();
+        }
+    } else if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             installTabBarObserver();
             installGlobalHotkeys();
@@ -1191,4 +2093,36 @@ console.info('[CC v1.33] boot');
         installTabBarObserver();
         installGlobalHotkeys();
     }
+
+    // R18: trigger dispatcher
+    const api = window.__scripts['CC'];
+    api.trigger = function (action) {
+      if (action === 'extract') {
+        // Build payload + XML directly (no DOM button required)
+        const payload = buildPayload();
+        const keyFields = Object.keys(payload).filter(k => payload[k] !== undefined && payload[k] !== '' && k !== 'dob');
+        if (keyFields.length === 0 && !payload.dob) {
+          api.state = 'error';
+          api.error = 'No extractable fields found (is the patient record loaded?)';
+          api.lastActivity = Date.now();
+          return { ok: false, error: api.error };
+        }
+        const xml = buildXmlOutput(payload);
+        api.output = xml;
+        api.state = 'done';
+        api.message = `Extracted ${keyFields.length} field(s)` + (payload.dob ? ' + DOB' : '');
+        api.lastActivity = Date.now();
+        // Also copy JSON to clipboard (preserves the manual behavior)
+        try { GM.setClipboard(JSON.stringify(payload)); } catch(e) {}
+        console.log('[CC] API extract:', xml);
+        return { ok: true, output: xml };
+      }
+      if (action === 'stop') {
+        api.state = 'idle';
+        api.message = 'Stopped';
+        api.lastActivity = Date.now();
+        return { ok: true };
+      }
+      return { ok: false, error: `unknown action: ${action}` };
+    };
 })();

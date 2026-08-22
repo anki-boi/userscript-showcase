@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM Context Extractor
 // @namespace    https://drjonesdc.com/
-// @version      2.9.5
+// @version      2.9.12
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  One-click Zoho context extractor: Notes, Care Plans, Comm Logs, Attachments
@@ -15,7 +15,20 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[ZCtx v2.9.5] boot');
+console.info('[ZCtx v2.9.12] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['ZCtx'] = {
+  name: 'Zoho CRM Context Extractor',
+  version: '2.9.12',
+  state: 'idle',
+  message: '',
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -27,14 +40,45 @@ console.info('[ZCtx v2.9.5] boot');
 
     // Load persisted settings or fallback to defaults
     const DEFAULT_CONFIG = {
-        format: 'json', // 'xml' or 'json'
-        action: 'download' // 'copy' or 'download'
+        format: 'xml', // 'xml' or 'json' (XML default — Jeyson 2026-08-20: reads better for AI)
+        action: 'copy' // 'copy' or 'download'
     };
 
     const CONFIG = {
         format: GM_getValue('cx_format', DEFAULT_CONFIG.format),
         action: GM_getValue('cx_action', DEFAULT_CONFIG.action)
     };
+
+    // ─── SECTION SELECTOR ─────────────────────────────────────────────────────
+    // The extractor can be told which related blocks to pull. Checkbox state
+    // persists in GM storage (cx_sections) and is honored by BOTH preload and
+    // extraction, so unchecked blocks are never fetched (no over-extraction).
+    // mountCheck is the DOM signal that the block actually mounted; preload
+    // waits for it so extraction never runs blind.
+    const SECTIONS = [
+        { id: 'notes', label: 'Notes', preloadLabel: 'Notes', mountCheck: null },
+        { id: 'carePlans', label: 'Care Plans', preloadLabel: 'Care Plan', mountCheck: () => !!document.querySelector('crm-related-list-view-header[related-module="CustomModule32"]') },
+        { id: 'commLogs', label: 'Communication Logs', preloadLabel: 'Communication Log', mountCheck: () => !!document.querySelector('crm-related-list-view-header[related-module="CustomModule27"]') },
+        { id: 'sms', label: 'SMS History', preloadLabel: 'RC SMS History', mountCheck: () => !!document.querySelector('crm-related-list-view-header[related-module="CustomModule75"]') },
+        { id: 'weeklyMeasurements', label: 'Weekly Measurements', preloadLabel: 'Weekly Measurements', mountCheck: () => !!document.querySelector('crm-related-list-view-header[related-module="CustomModule42"]') },
+        { id: 'attachments', label: 'Attachments', preloadLabel: 'Attachments', mountCheck: () => !!document.querySelector('span[id^="attach_"]') },
+        { id: 'openActivities', label: 'Open Activities', preloadLabel: 'Open Activities', mountCheck: () => !!document.querySelector('crm-activity-rel-wrapper#Activities crm-activity-rel-list') },
+        { id: 'closedActivities', label: 'Closed Activities', preloadLabel: 'Closed Activities', mountCheck: () => !!document.querySelector('crm-activity-rel-wrapper#Activities_History crm-activity-rel-list') }
+    ];
+
+    // Loaded from storage; unknown keys default to on. `saved[id] !== false`
+    // means an explicitly-stored false stays off, anything else stays on.
+    let selectedSections = (() => {
+        const out = {};
+        let saved = {};
+        try { saved = JSON.parse(GM_getValue('cx_sections', '{}') || '{}') || {}; } catch (e) { saved = {}; }
+        SECTIONS.forEach(s => { out[s.id] = saved[s.id] !== false; });
+        return out;
+    })();
+
+    function saveSelectedSections() {
+        GM_setValue('cx_sections', JSON.stringify(selectedSections));
+    }
 
     // Cancellation state — set true to abort an in-progress extraction mid-run.
     let cancelled = false;
@@ -144,7 +188,8 @@ console.info('[ZCtx v2.9.5] boot');
                 // Already extracting — a second press cancels at the next checkpoint.
                 cancelExtraction();
             } else {
-                runExtraction();
+                // Always ask which sections to extract (remembered via checkboxes).
+                showSectionPopup();
             }
         });
         toggle.addEventListener('contextmenu', (e) => {
@@ -164,6 +209,114 @@ console.info('[ZCtx v2.9.5] boot');
     const settingsMenu = document.createElement('div');
     settingsMenu.id = 'cx-settings-menu';
     document.body.appendChild(settingsMenu);
+
+    // ─── SECTION SELECTOR POPUP ────────────────────────────────────────────────
+    // Checkbox list anchored just above the toolbar button; shown on every
+    // Extract click so the user picks what to pull (state is remembered).
+    const sectionPopup = document.createElement('div');
+    sectionPopup.id = 'cx-section-popup';
+    sectionPopup.style.cssText = 'display:none;position:fixed;z-index:99999;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,0.2);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:13px;color:#333;min-width:240px;';
+    document.body.appendChild(sectionPopup);
+
+    function positionSectionPopup(btnRect) {
+        sectionPopup.style.left = 'auto';
+        sectionPopup.style.top = 'auto';
+        sectionPopup.style.right = (window.innerWidth - btnRect.right + 2) + 'px';
+        sectionPopup.style.bottom = (window.innerHeight - btnRect.top + 10) + 'px';
+    }
+
+    // Segmented picker row for the section popup — Format (XML/JSON) and
+    // Action (Copy/Download), shown after the section checkboxes so the run
+    // can be shaped in one place (Jeyson 2026-08-20). Persists via
+    // updateConfig; the right-click menu's readouts stay in sync.
+    function makeSegmentedRow(label, configKey, options) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;';
+        const lab = document.createElement('span');
+        lab.textContent = label;
+        lab.style.cssText = 'color:#666;font-weight:600;';
+        row.appendChild(lab);
+
+        const btns = options.map(([value, text]) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = text;
+            b.style.cssText = 'padding:3px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;color:#333;';
+            b.addEventListener('click', () => {
+                updateConfig(configKey, value);
+                paintAll();
+                const fmtEl = document.getElementById('cx-display-format');
+                if (fmtEl) fmtEl.textContent = CONFIG.format.toUpperCase();
+                const actEl = document.getElementById('cx-display-action');
+                if (actEl) actEl.textContent = CONFIG.action.charAt(0).toUpperCase() + CONFIG.action.slice(1);
+            });
+            row.appendChild(b);
+            return b;
+        });
+        const paintAll = () => {
+            btns.forEach((b, i) => {
+                const active = CONFIG[configKey] === options[i][0];
+                b.style.background = active ? '#1b2a4a' : '#fff';
+                b.style.color = active ? '#fff' : '#333';
+                b.style.borderColor = active ? '#1b2a4a' : '#ccc';
+                b.style.fontWeight = active ? '600' : '400';
+            });
+        };
+        paintAll();
+        return row;
+    }
+
+    function buildSectionPopup() {
+        sectionPopup.innerHTML = '';
+        const title = document.createElement('div');
+        title.textContent = 'Extract sections';
+        title.style.cssText = 'font-weight:700;margin-bottom:6px;font-size:13px;';
+        sectionPopup.appendChild(title);
+
+        SECTIONS.forEach(s => {
+            const row = document.createElement('label');
+            row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:3px 0;cursor:pointer;user-select:none;';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = selectedSections[s.id];
+            cb.addEventListener('change', () => {
+                selectedSections[s.id] = cb.checked;
+                saveSelectedSections();
+            });
+            row.appendChild(cb);
+            row.appendChild(document.createTextNode(s.label));
+            sectionPopup.appendChild(row);
+        });
+
+        // Format + Action pickers, right after the checkboxes (2026-08-20).
+        const sep = document.createElement('div');
+        sep.style.cssText = 'border-top:1px solid #eee;margin:8px 0 2px;';
+        sectionPopup.appendChild(sep);
+        sectionPopup.appendChild(makeSegmentedRow('Format', 'format', [['xml', 'XML'], ['json', 'JSON']]));
+        sectionPopup.appendChild(makeSegmentedRow('Action', 'action', [['copy', '📋 Copy'], ['download', '💾 Download']]));
+
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:6px;justify-content:flex-end;margin-top:8px;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.style.cssText = 'padding:4px 12px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;';
+        cancelBtn.onclick = () => { sectionPopup.style.display = 'none'; };
+        const runBtn = document.createElement('button');
+        runBtn.textContent = 'Extract';
+        runBtn.style.cssText = 'padding:4px 16px;border:0;border-radius:4px;background:#1b2a4a;color:#fff;cursor:pointer;font-size:12px;font-weight:600;';
+        runBtn.onclick = () => { sectionPopup.style.display = 'none'; runExtraction(); };
+        btnRow.appendChild(cancelBtn);
+        btnRow.appendChild(runBtn);
+        sectionPopup.appendChild(btnRow);
+    }
+
+    function showSectionPopup() {
+        closeMenu();
+        buildSectionPopup();
+        const btn = document.getElementById('cx-extractor-toolbar-btn');
+        if (btn) positionSectionPopup(btn.getBoundingClientRect());
+        sectionPopup.style.display = 'block';
+    }
 
     // Format Selector
     const formatItem = document.createElement('div');
@@ -228,9 +381,16 @@ console.info('[ZCtx v2.9.5] boot');
         settingsMenu.classList.remove('visible');
     }
 
-    // Close menu if clicking outside
+    // Close menu if clicking outside. NOTE: a real click on the toolbar button
+    // lands on its inner <strong> (e.target has no id), so match the button by
+    // closest(), never by e.target.id — otherwise the popup is shown by the
+    // button handler and instantly hidden by this outside-click handler.
     document.addEventListener('click', (e) => {
-        if (!settingsMenu.contains(e.target) && e.target.id !== 'cx-extractor-toolbar-btn') closeMenu();
+        const onToolbarBtn = !!(e.target.closest && e.target.closest('#cx-extractor-toolbar-btn'));
+        if (!settingsMenu.contains(e.target) && !onToolbarBtn) closeMenu();
+        if (!sectionPopup.contains(e.target) && !onToolbarBtn) {
+            sectionPopup.style.display = 'none';
+        }
     });
 
     // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -436,16 +596,26 @@ console.info('[ZCtx v2.9.5] boot');
     }
 
     // Rewind to page 1 before collecting, in case a previous run or the user left the
-    // list mid-pagination.
+    // list mid-pagination. Some navigator layouts never mark the disabled button
+    // (no lyteDisabled/aria-disabled on the first page) — a prev click that doesn't
+    // swap rows means we're already at the start, so two consecutive no-change
+    // rounds stop the walk instead of spinning the full guard.
     async function rewindSmsPagination(relatedListId) {
         let guard = 0;
+        let noChangeRounds = 0;
         while (guard < 200) {
             if (cancelled) break;
             const prev = getNavButton(relatedListId, 'prev');
             if (isNavDisabled(prev)) break;
             const sig = smsPageSignature();
             prev.click();
-            await waitForSmsPageChange(sig);
+            const changed = await waitForSmsPageChange(sig);
+            if (!changed) {
+                noChangeRounds++;
+                if (noChangeRounds >= 2) break;
+            } else {
+                noChangeRounds = 0;
+            }
             guard++;
         }
     }
@@ -499,6 +669,13 @@ console.info('[ZCtx v2.9.5] boot');
             next.click();
             const changed = await waitForSmsPageChange(sig);
             if (!changed) break;
+
+            // Some navigator layouts never disable the next button — clicking past
+            // the last page wraps back to already-seen pages. If the freshly loaded
+            // page's rows are all already collected, the walk has cycled: stop.
+            const pageIds = [...container.querySelectorAll('lyte-tbody lyte-tr')]
+                .map(tr => tr.getAttribute('id') || '');
+            if (pageIds.length > 0 && pageIds.every(id => seen.has(id))) break;
             guard++;
         }
 
@@ -534,7 +711,8 @@ console.info('[ZCtx v2.9.5] boot');
         'RC SMS History',
         'Open Activities',
         'Closed Activities',
-        'Attachments'
+        'Attachments',
+        'Weekly Measurements'
     ];
 
     function findLeftPanelItem(displayLabel) {
@@ -546,15 +724,40 @@ console.info('[ZCtx v2.9.5] boot');
         return wrapper.querySelector('li[click*="scrollToRelatedView"]') || wrapper.querySelector('li');
     }
 
+    // Mount check per preload label: does the block's actual content exist in the DOM?
+    // Sections without a mountCheck (Notes) are treated as always mounted.
+    function isListMounted(displayLabel) {
+        const section = SECTIONS.find(s => s.preloadLabel === displayLabel);
+        return section && section.mountCheck ? section.mountCheck() : true;
+    }
+
+    // Click a left-panel item and wait until its block actually mounts. Zoho
+    // lazy-mounts related lists on scroll and can take 6-10s+ on a fresh record,
+    // and a click too early in the page's life can be a silent no-op — so poll
+    // for the mount (re-clicking every 5s) up to a 15s cap. Never stalls the
+    // run: a block that won't mount just yields [] at extraction time.
+    async function mountRelatedList(displayLabel) {
+        const item = findLeftPanelItem(displayLabel);
+        if (!item) return;
+        const start = Date.now();
+        let attempts = 0;
+        while (Date.now() - start < 15000) {
+            if (cancelled) return;
+            if (isListMounted(displayLabel)) return;
+            if (attempts === 0 || Date.now() - start > attempts * 5000) {
+                item.click();
+                attempts++;
+            }
+            await sleep(500);
+        }
+    }
+
     async function preloadRelatedLists() {
         for (const label of RL_LABELS_TO_PRELOAD) {
             if (cancelled) return;
-            const item = findLeftPanelItem(label);
-            if (!item) continue;
-            item.click();
-            // Give the block time to mount + fire its data load. Activities columns
-            // and comm-log tables render asynchronously after the click.
-            await sleep(1200);
+            const section = SECTIONS.find(s => s.preloadLabel === label);
+            if (section && !selectedSections[section.id]) continue; // skipped section: never fetch
+            await mountRelatedList(label);
         }
         // Return to the top of the detail view so notes-expand etc. operate cleanly.
         const topBtn = document.querySelector('#dvScrollTopDiv');
@@ -669,8 +872,8 @@ console.info('[ZCtx v2.9.5] boot');
     }
 
     async function extractActivities() {
-        const open   = await extractActivitiesWrapper('Activities', 'open');
-        const closed = await extractActivitiesWrapper('Activities_History', 'closed');
+        const open   = selectedSections.openActivities ? await extractActivitiesWrapper('Activities', 'open') : [];
+        const closed = selectedSections.closedActivities ? await extractActivitiesWrapper('Activities_History', 'closed') : [];
         return { open, closed };
     }
 
@@ -937,7 +1140,7 @@ console.info('[ZCtx v2.9.5] boot');
         return xml;
     }
 
-    function buildXmlOutput(patientName, notes, carePlans, commLogs, smsMessages, activities, attachments) {
+    function buildXmlOutput(patientName, notes, carePlans, commLogs, smsMessages, weeklyMeasurements, activities, attachments) {
         let xml = `<zoho_context>\n  <patient>${escapeXml(patientName)}</patient>\n`;
 
         if (notes.length > 0) {
@@ -971,6 +1174,16 @@ console.info('[ZCtx v2.9.5] boot');
                 xml += `    </comm_log>\n`;
             });
             xml += `  </comm_logs>\n`;
+        }
+
+        if (weeklyMeasurements.length > 0) {
+            xml += `\n  <weekly_measurements>\n`;
+            weeklyMeasurements.forEach(wm => {
+                xml += `    <measurement>\n`;
+                Object.keys(wm).forEach(k => { xml += `      <${k}>${escapeXml(wm[k])}</${k}>\n`; });
+                xml += `    </measurement>\n`;
+            });
+            xml += `  </weekly_measurements>\n`;
         }
 
         if (smsMessages.length > 0) {
@@ -1022,13 +1235,14 @@ console.info('[ZCtx v2.9.5] boot');
         return xml;
     }
 
-    function buildJsonOutput(patientName, notes, carePlans, commLogs, smsMessages, activities, attachments) {
+    function buildJsonOutput(patientName, notes, carePlans, commLogs, smsMessages, weeklyMeasurements, activities, attachments) {
         return JSON.stringify({
             patient: patientName,
             notes: notes,
             care_plans: carePlans,
             comm_logs: commLogs,
             sms_history: smsMessages,
+            weekly_measurements: weeklyMeasurements,
             attachments: attachments,
             activities: activities
         }, null, 2);
@@ -1042,6 +1256,8 @@ console.info('[ZCtx v2.9.5] boot');
         if (isRunning) return;
         isRunning = true;
         cancelled = false;
+        const api = window.__scripts['ZCtx'];
+        api.state = 'running'; api.message = 'Extracting context...'; api.output = null; api.lastActivity = Date.now();
         const toggle = document.getElementById('cx-extractor-toolbar-btn');
         if (toggle) {
             toggle.classList.add('cx-working');
@@ -1052,20 +1268,25 @@ console.info('[ZCtx v2.9.5] boot');
         showToast('Extracting... (click Extract Profile again to cancel)', 'success', 60000);
 
         try {
+            const want = selectedSections;
+
             await preloadRelatedLists();
             if (cancelled) return;
             await sleep(300);
 
-            await expandNotes();
-            if (cancelled) return;
-            await sleep(300);
+            if (want.notes) {
+                await expandNotes();
+                if (cancelled) return;
+                await sleep(300);
+            }
 
-            const notes       = extractNotes();
-            const carePlans   = extractRelatedListTable('CustomModule32');
-            const commLogs    = extractRelatedListTable('CustomModule27');
-            const smsMessages = await extractSmsHistory();
+            const notes       = want.notes ? extractNotes() : [];
+            const carePlans   = want.carePlans ? extractRelatedListTable('CustomModule32') : [];
+            const commLogs    = want.commLogs ? extractRelatedListTable('CustomModule27') : [];
+            const weeklyMeasurements = want.weeklyMeasurements ? extractRelatedListTable('CustomModule42') : [];
+            const smsMessages = want.sms ? await extractSmsHistory() : [];
             if (cancelled) return;
-            const attachments = extractAttachments();
+            const attachments = want.attachments ? extractAttachments() : [];
             const activities  = await extractActivities();
             if (cancelled) return;
 
@@ -1074,14 +1295,20 @@ console.info('[ZCtx v2.9.5] boot');
             let extension;
 
             if (CONFIG.format === 'json') {
-                content = buildJsonOutput(getPatientName(), notes, carePlans, commLogs, smsMessages, activities, attachments);
+                content = buildJsonOutput(getPatientName(), notes, carePlans, commLogs, smsMessages, weeklyMeasurements, activities, attachments);
                 mimeType = 'application/json';
                 extension = 'json';
             } else {
-                content = buildXmlOutput(getPatientName(), notes, carePlans, commLogs, smsMessages, activities, attachments);
+                content = buildXmlOutput(getPatientName(), notes, carePlans, commLogs, smsMessages, weeklyMeasurements, activities, attachments);
                 mimeType = 'text/xml';
                 extension = 'xml';
             }
+
+            // R18: expose output via Script API
+            api.output = content;
+            api.state = 'done';
+            api.message = 'Extracted (' + CONFIG.format + ')';
+            api.lastActivity = Date.now();
 
             if (CONFIG.action === 'copy') {
                 if (typeof GM_setClipboard === 'function') {
@@ -1102,16 +1329,22 @@ console.info('[ZCtx v2.9.5] boot');
                 URL.revokeObjectURL(url);
             }
 
-            // Restored Diagnostic Toast
+            // Restored Diagnostic Toast — only counts the sections that were requested.
             const actTotal = activities.open.length + activities.closed.length;
             const actionText = CONFIG.action === 'copy' ? 'Copied' : 'Downloaded';
-            showToast(
-                `✓ ${actionText} — Notes: ${notes.length} · Care Plans: ${carePlans.length} · Comm Logs: ${commLogs.length} · SMS: ${smsMessages.length} · Attachments: ${attachments.length} · Activities: ${actTotal} (${activities.open.length} open / ${activities.closed.length} closed)`,
-                'success'
-            );
+            const parts = [];
+            if (want.notes) parts.push(`Notes: ${notes.length}`);
+            if (want.carePlans) parts.push(`Care Plans: ${carePlans.length}`);
+            if (want.commLogs) parts.push(`Comm Logs: ${commLogs.length}`);
+            if (want.sms) parts.push(`SMS: ${smsMessages.length}`);
+            if (want.attachments) parts.push(`Attachments: ${attachments.length}`);
+            if (want.weeklyMeasurements) parts.push(`Measurements: ${weeklyMeasurements.length}`);
+            if (want.openActivities || want.closedActivities) parts.push(`Activities: ${actTotal} (${activities.open.length} open / ${activities.closed.length} closed)`);
+            showToast(`✓ ${actionText} — ${parts.join(' · ')}`, 'success');
 
         } catch (err) {
             console.error('[Context Extractor]', err);
+            api.state = 'error'; api.error = err.message; api.message = 'Failed: ' + err.message; api.lastActivity = Date.now();
             showToast('✗ Extraction failed: ' + err.message, 'error', 5000);
         } finally {
             if (toggle) {
@@ -1138,4 +1371,25 @@ console.info('[ZCtx v2.9.5] boot');
 
     // Kick off toolbar injection
     injectToolbarButton();
+
+    // R18: trigger dispatcher
+    const api = window.__scripts['ZCtx'];
+    api.trigger = function (action) {
+      if (action === 'extract') {
+        if (isRunning) return { ok: false, error: 'already running' };
+        api.state = 'running'; api.message = 'Extracting context...'; api.output = null; api.error = null; api.lastActivity = Date.now();
+        runExtraction().then(() => {
+          api.lastActivity = Date.now();
+        }).catch(err => {
+          api.state = 'error'; api.error = err.message; api.message = 'Failed: ' + err.message; api.lastActivity = Date.now();
+        });
+        return { ok: true };
+      }
+      if (action === 'stop') {
+        cancelExtraction();
+        api.state = 'idle'; api.message = 'Cancelled'; api.lastActivity = Date.now();
+        return { ok: true };
+      }
+      return { ok: false, error: 'unknown action: ' + action };
+    };
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM Auto-Expand Textareas on Focus
 // @namespace    drjonesdc
-// @version      3.3
+// @version      3.4
 // @author       Jeyson Dagondon
 // @description  Auto-expands textareas to full content height on focus, input, or value change
 // @match        https://*.zoho.com/*
@@ -12,7 +12,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[AutoExpand v3.3] boot');
+console.info('[AutoExpand v3.4] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['AutoExpand'] = { name: 'Zoho CRM Auto-Expand Textareas on Focus', version: '3.4', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 (function () {
   'use strict';

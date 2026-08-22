@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Task Due Date Quick-Set (Inline)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @author       Jeyson Dagondon
 // @description  Inline button beside the Due Date field to set N days/weeks ahead
 // @match        https://crm.zoho.com/*
@@ -11,7 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[DueDateQS v1.2] boot');
+console.info('[DueDateQS v1.3] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['DueDateQS'] = { name: 'Zoho Task Due Date Quick-Set (Inline)', version: '1.3', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 (function () {
   'use strict';

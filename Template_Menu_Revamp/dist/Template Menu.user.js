@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Template Menu
 // @namespace    http://tampermonkey.net/
-// @version      6.16
+// @version      6.14
 // @description  Cascading template quick-insert menu: live preview, search, recent tracking
 // @author       Jeyson Dagondon
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
@@ -19,11 +19,7 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TMenu v6.16] boot');
-
-// --- Script API (R18) ---
-window.__scripts = window.__scripts || {};
-window.__scripts['TMenu'] = { name: 'Template Menu', version: '6.16', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+console.info('[TMenu v6.14] boot');
 
 // The Claude prompt used to audit/rebalance peptide stack order templates is
 // maintained outside this repo (not part of this script).
@@ -1236,16 +1232,6 @@ Dosing: 2 capsules
 Frequency: Daily
 Estimated Duration: 12 weeks`,
       },
-      "LL-37": {
-        "1 Vial / 5mL":
-`Products Ordered:
-[date] (Pharmacy K) [initials]
-Order #
-Medication: 1 vial of 5mL LL-37 5mg/mL
-Dosing: Inject daily, 1 month on, 1 month off
-Frequency: Daily
-Estimated Duration: 25 days`,
-      },
     },
     // ================================================================
     // PHARMACY F
@@ -1703,29 +1689,6 @@ Concentration: 1 mg/mL
 Dosing: 10 units (0.1 mL = 0.1 mg) subcutaneously
 Frequency: Two times per week
 Estimated Duration: 2 months`,
-        },
-        "[GRE] LL-37 injectable": {
-          "1 Month":
-`Products Ordered:
-[date] (Greenwich) [initials]
-Medication: 1x5mL LL-37
-Concentration: 2 mg/mL
-Dosing: 20 units (0.2 mL = 0.4 mg) subcutaneously
-Frequency: Once daily, Monday through Friday`,
-          "2 Months":
-`Products Ordered:
-[date] (Greenwich) [initials]
-Medication: 2x5mL LL-37
-Concentration: 2 mg/mL
-Dosing: 20 units (0.2 mL = 0.4 mg) subcutaneously
-Frequency: Once daily, Monday through Friday`,
-          "3 Months":
-`Products Ordered:
-[date] (Greenwich) [initials]
-Medication: 3x5mL LL-37
-Concentration: 2 mg/mL
-Dosing: 20 units (0.2 mL = 0.4 mg) subcutaneously
-Frequency: Once daily, Monday through Friday`,
         },
         // ---------------- Cognitive ----------------
         "[GRE] Pinealon/PE22-28/Selank injectable": {

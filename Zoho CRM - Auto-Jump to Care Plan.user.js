@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM - Auto-Jump to Care Plan
 // @namespace    http://tampermonkey.net/
-// @version      6.3
+// @version      6.4
 // @author       Jeyson Dagondon
 // @description  Auto-scrolls to the Care Plan section once it's bound to the current patient
 // @match        https://crm.zoho.com/crm/org695301973/tab/Contacts/*
@@ -11,7 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[CarePlan v6.3] boot');
+console.info('[CarePlan v6.4] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['CarePlan'] = { name: 'Zoho CRM - Auto-Jump to Care Plan', version: '6.4', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 (function() {
     'use strict';

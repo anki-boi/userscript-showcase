@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM Patient Quick Copy (Top Panel)
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Always-visible patient phone + address pills in the CRM top panel; click to copy
 // @author       Jeyson Dagondon
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
@@ -12,7 +12,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[QuickCopy v1.5] boot');
+console.info('[QuickCopy v1.6] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['QuickCopy'] = { name: 'Zoho CRM Patient Quick Copy (Top Panel)', version: '1.6', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);

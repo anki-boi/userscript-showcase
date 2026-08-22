@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LifeFile Order Status Extractor
 // @namespace    jeyson
-// @version      1.11
+// @version      1.13
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @match        *://*/application_main_zfw/poeerx/providerrxstatusbk*
@@ -11,7 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Status v1.11] boot');
+console.info('[LF-Status v1.13] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['LF-Status'] = { name: 'LifeFile Order Status Extractor', version: '1.13', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -393,7 +397,11 @@ console.info('[LF-Status v1.11] boot');
         if (!intent || !intent._lf || !intent._lf.extract) return false;
         const ex = intent._lf.extract;
         let from, to, label;
-        if (ex.mode === 'date' && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(ex.date || '')) {
+        if (ex.mode === 'days' && typeof ex.days === 'number' && ex.days >= 1) {
+            // v1.12: Tracking Bus v2.32 sends a configurable range (last N days).
+            const n = Math.min(Math.floor(ex.days), 365);
+            from = denverDate(-n); to = denverDate(0); label = 'last ' + n + ' days';
+        } else if (ex.mode === 'date' && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(ex.date || '')) {
             from = ex.date; to = ex.date; label = 'orders on ' + ex.date;
         } else {
             from = denverDate(-30); to = denverDate(0); label = 'last 30 days';
@@ -420,4 +428,22 @@ console.info('[LF-Status v1.11] boot');
         e.preventDefault();
         document.getElementById('filter_order_status').submit();
     }, true);
+
+    // R18: trigger dispatcher
+    const api = window.__scripts['LF-Status'];
+    api.trigger = function (action) {
+      if (action === 'extract') {
+        api.state = 'running'; api.message = 'Extracting order status...'; api.lastActivity = Date.now();
+        run(false).then(result => {
+          if (result) {
+            api.output = result.tsv; api.state = 'done'; api.message = 'Extracted ' + result.count + ' orders';
+          } else {
+            api.state = 'error'; api.error = 'Extraction failed';
+          }
+          api.lastActivity = Date.now();
+        });
+        return { ok: true };
+      }
+      return { ok: false, error: 'unknown action: ' + action };
+    };
 })();

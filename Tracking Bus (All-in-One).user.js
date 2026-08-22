@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Tracking Bus (All-in-One)
 // @namespace    drjones-trackbus
-// @version      2.28
+// @version      2.33
 // @author       Jeyson Dagondon
-// @description  Paste rows, auto-open UPS/FedEx, extract DS+TN, patient->Zoho, write back
+// @description  Fetch blank days (configurable), parse rows, auto-open UPS/FedEx, extract DS+TN
 // @match        https://docs.google.com/spreadsheets/*
 // @match        *://www.fedex.com/*
 // @match        *://*.fedex.com/*
@@ -19,7 +19,21 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TrackBus v2.28] boot');
+console.info('[TrackBus v2.33] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['TrackBus'] = {
+  name: 'Tracking Bus (All-in-One)',
+  version: '2.33',
+  state: 'idle',
+  message: '',
+  progress: null,
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
 
 (function () {
   'use strict';
@@ -65,7 +79,13 @@ console.info('[TrackBus v2.28] boot');
     GM_setValue('tb:' + tn, JSON.stringify({ date: date, carrier: carrier, ts: Date.now() }));
     var close = function () {
       toast('✓ Tracking copied', true);
-      setTimeout(function () { window.close(); }, 700);
+      // v2.31 (Jeyson): one-tab-at-a-time runs REUSE this tab — while the
+      // sheet's tb:seq flag is set, do NOT self-close (the controller
+      // navigates this tab to the next TN and closes it at run end).
+      // Manual opens (flag unset) still close as before.
+      var seqMode = false;
+      try { seqMode = GM_getValue('tb:seq', 0) === 1; } catch (e) { seqMode = false; }
+      if (!seqMode) setTimeout(function () { window.close(); }, 700);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(close)
@@ -274,8 +294,8 @@ console.info('[TrackBus v2.28] boot');
      ============================================================ */
 
   function runController() {
-    var box, btn, driveBtn, writeBtn, sweepBtn, status, resultsPanel, resultsBody;
-    var lfFetchBtn, lfPortalWin = null, lfCleanup = null;
+    var box, btn, driveBtn, status, resultsPanel, resultsBody;
+    var lfFetchBtn, daysInput, lfPortalWin = null, lfCleanup = null;
     var rowStatus = [], statusCells = [], dateCells = [], openedAt = [];
     var currentDateLabel = 'Date Shipped';
     var headDateEl = null;
@@ -319,8 +339,10 @@ console.info('[TrackBus v2.28] boot');
             if (text[i + 1] === '"') { cur += '"'; i++; }
             else inQ = false;
           } else cur += ch;
-        } else if (ch === '"') {
+        } else if (ch === '"' && cur === '') {
           inQ = true;
+        } else if (ch === '"') {
+          cur += ch;
         } else if (ch === delim) {
           row.push(cur); cur = '';
         } else if (ch === '\n') {
@@ -565,9 +587,10 @@ console.info('[TrackBus v2.28] boot');
       return names.join('; ');
     }
 
-    function copyText(value, label) {
+    function copyText(value, label, el) {
       GM_setClipboard(value, 'text');
       toast('Copied ' + label + ': ' + value, true);
+      if (el) { el.classList.remove('tb-flash'); void el.offsetWidth; el.classList.add('tb-flash'); }
     }
 
     function renderTable(items) {
@@ -589,6 +612,7 @@ console.info('[TrackBus v2.28] boot');
         return el;
       }
       var headRow = document.createElement('tr');
+      headRow.appendChild(th('')); // v2.29 (Jeyson): ✕ moved to the LEFT — next to the name
       headRow.appendChild(th('Patient'));
       headRow.appendChild(th('Carrier'));
       headRow.appendChild(th('Tracking #'));
@@ -598,7 +622,6 @@ console.info('[TrackBus v2.28] boot');
       headRow.appendChild(th('Order Date'));
       headRow.appendChild(th('Products'));
       headRow.appendChild(th('Status'));
-      headRow.appendChild(th('')); // v2.22: ✕ clear column
       table.appendChild(headRow);
 
       items.forEach(function (it, idx) {
@@ -608,9 +631,10 @@ console.info('[TrackBus v2.28] boot');
         function td(text, label) {
           var el = document.createElement('td');
           el.textContent = text || '';
+          el.className = 'tb-copy-cell';
           el.style.cssText = 'padding:4px 6px;cursor:pointer;white-space:pre-wrap;word-break:break-all';
           el.title = 'Click to copy ' + (label || '');
-          el.onclick = function () { copyText(text, label); };
+          el.onclick = function () { copyText(text, label, el); };
           return el;
         }
         // v2.8 (Jeyson): the Tracking # and Date cells return the FULL pair
@@ -619,17 +643,30 @@ console.info('[TrackBus v2.28] boot');
         function pairTd(text) {
           var el = document.createElement('td');
           el.textContent = text || '';
+          el.className = 'tb-copy-cell';
           el.style.cssText = 'padding:4px 6px;cursor:pointer;white-space:pre-wrap;word-break:break-all;color:var(--ds-text,#cdd)';
           el.title = 'Click to copy Date Shipped + TN';
-          el.onclick = function () { copyPair(it); };
+          el.onclick = function () { copyPair(it, el); };
           return el;
         }
+        // v2.29 (Jeyson): ✕ first — next to the name, so it's clear which row
+        // gets removed. The clear only drops the panel row, never the sheet.
+        var xTd = document.createElement('td');
+        xTd.style.cssText = 'padding:4px 6px;text-align:center;width:24px';
+        var xBtn = document.createElement('button');
+        xBtn.textContent = '✕';
+        xBtn.style.cssText = 'cursor:pointer;background:none;border:none;color:var(--ds-text,#c99);font-size:12px;line-height:1;padding:2px 4px;border-radius:3px';
+        xBtn.title = 'Clear this row';
+        xBtn.onclick = function () { clearRow(idx, tr); };
+        xTd.appendChild(xBtn);
+        tr.appendChild(xTd);
         // v2.26 (Jeyson): NO hyperlink — the patient name is a copy button.
         var patTd = document.createElement('td');
         patTd.textContent = it.patient || '';
+        patTd.className = 'tb-copy-cell';
         patTd.style.cssText = 'padding:4px 6px;cursor:pointer;white-space:pre-wrap;word-break:break-all';
         patTd.title = 'Click to copy patient name';
-        patTd.onclick = function () { copyText(it.patient, 'patient name'); };
+        patTd.onclick = function () { copyText(it.patient, 'patient name', patTd); };
         tr.appendChild(patTd);
         tr.appendChild(td(it.carrier, 'carrier'));
         tr.appendChild(pairTd(it.tn));
@@ -652,16 +689,6 @@ console.info('[TrackBus v2.28] boot');
         stTd.style.cssText = 'padding:4px 6px;text-align:center;color:var(--ds-success,#9c9)';
         statusCells.push(stTd);
         tr.appendChild(stTd);
-        // v2.22 (Jeyson): ✕ clears a parsed row so the panel stays neat.
-        var xTd = document.createElement('td');
-        xTd.style.cssText = 'padding:4px 6px;text-align:center;width:24px';
-        var xBtn = document.createElement('button');
-        xBtn.textContent = '✕';
-        xBtn.style.cssText = 'cursor:pointer;background:none;border:none;color:var(--ds-text,#c99);font-size:12px;line-height:1;padding:2px 4px;border-radius:3px';
-        xBtn.title = 'Clear this row';
-        xBtn.onclick = function () { clearRow(idx, tr); };
-        xTd.appendChild(xBtn);
-        tr.appendChild(xTd);
         table.appendChild(tr);
       });
 
@@ -671,9 +698,8 @@ console.info('[TrackBus v2.28] boot');
     }
 
     // v2.22 (Jeyson): ✕ in the results table — remove a parsed row so the
-    // panel stays neat. Only the panel row is dropped; the sheet is untouched
-    // (Write Back is the explicit write path). Cleared rows are skipped by the
-    // poller (rowStatus !== 'opening') and by setRow (nulled cells).
+    // panel stays neat. Only the panel row is dropped; the sheet is untouched.
+    // Cleared rows are skipped by setRow (nulled cells).
     function clearRow(idx, tr) {
       rowStatus[idx] = 'cleared';
       statusCells[idx] = null;
@@ -690,10 +716,10 @@ console.info('[TrackBus v2.28] boot');
       }
     }
 
-    function copyPair(it) {
-      if (!it.date) { copyText(it.tn, 'tracking #'); return; } // pre-extraction / failed row
+    function copyPair(it, el) {
+      if (!it.date) { copyText(it.tn, 'tracking #', el); return; } // pre-extraction / failed row
       var label = it.dateLabel || 'Date Shipped';
-      copyText('\n' + label + ': ' + it.date + '\nTN: ' + (it.carrier ? it.carrier + ' - ' : '') + it.tn, label + ' + TN');
+      copyText('\n' + label + ': ' + it.date + '\nTN: ' + (it.carrier ? it.carrier + ' - ' : '') + it.tn, label + ' + TN', el);
     }
 
     function setRow(idx, state, date) {
@@ -708,6 +734,16 @@ console.info('[TrackBus v2.28] boot');
         dateCells[idx].title = 'Click to copy Date Shipped + TN';
         if (headDateEl && headDateEl.textContent !== 'Date Shipped') headDateEl.textContent = 'Date Shipped';
       }
+      // R18: update progress in the Script API
+      if (rowStatus.length) {
+        var done = rowStatus.filter(function(s){return s==='done'||s==='skip';}).length;
+        window.__scripts['TrackBus'].progress = { done: done, total: rowStatus.length };
+        window.__scripts['TrackBus'].lastActivity = Date.now();
+        if (done === rowStatus.length) {
+          window.__scripts['TrackBus'].state = 'done';
+          window.__scripts['TrackBus'].message = done + ' rows complete';
+        }
+      }
     }
 
     // v2.7 (Jeyson's flow): the script builds the carrier links itself (same
@@ -720,47 +756,94 @@ console.info('[TrackBus v2.28] boot');
       return 'https://www.fedex.com/wtrk/track/?tracknumbers=' + tn;
     }
 
-    function openAndExtract() {
-      var items = parseToJSON();
-      if (!items.length) { toast('No tracking numbers to open', false); return; }
-      currentItems = items;
-      renderTable(items, currentDateLabel);
-      var anyOpen = false;
-      items.forEach(function (it, idx) {
-        var url = carrierUrl(it.tn);
-        if (!url) { setRow(idx, 'failed'); return; }
-        GM_deleteValue('tb:' + it.tn); // clear any stale result from a prior run
-        var w = window.open(url, '_blank');
-        if (!w) { setRow(idx, 'failed'); return; } // popup blocked
-        anyOpen = true;
-        openedAt[idx] = Date.now();
-        setRow(idx, 'opening');
-      });
-      if (!anyOpen) { toast('⚠ Popups blocked — allow popups for this site', false); return; }
-      toast('Extracting from carrier pages…', true);
-      startPoller(items);
+    /* ============================================================
+       v2.31 (Jeyson): ONE carrier tab at a time. Opening the whole
+       table at once flooded RAM and the line, so each item now waits
+       for the previous extraction before the next opens. The first
+       open rides the click's user gesture; every later item NAVIGATES
+       the same tab (navigation is never popup-blocked, unlike a fresh
+       window.open after an await). The extractor skips its self-close
+       while the tb:seq flag is set, so the tab survives for reuse;
+       the controller closes it at run end.
+       ============================================================ */
+    var tbCarrierWin = null;
+    var tbExtractBusy = false;
+
+    function openTbTab(url) {
+      if (tbCarrierWin && !tbCarrierWin.closed) {
+        try { tbCarrierWin.location.href = url; return tbCarrierWin; }
+        catch (e) { tbCarrierWin = null; } // proxy gone — fall through
+      }
+      tbCarrierWin = window.open(url, '_blank');
+      return tbCarrierWin;
     }
 
-    function startPoller(items) {
-      var poller = setInterval(function () {
-        var allDone = true;
-        items.forEach(function (it, idx) {
-          if (rowStatus[idx] !== 'opening') return;
-          if (Date.now() - openedAt[idx] > 90000) { setRow(idx, 'failed'); return; }
+    function closeTbTab() {
+      try { GM_deleteValue('tb:seq'); } catch (e) { LOG('closeTbTab delete', e); }
+      if (tbCarrierWin && !tbCarrierWin.closed) {
+        try { tbCarrierWin.close(); } catch (e) { LOG('closeTbTab close', e); }
+      }
+      tbCarrierWin = null;
+    }
+
+    function awaitTb(it, timeoutMs) {
+      // Poll GM storage until the extractor publishes tb:<tn>. Resolves
+      // true on a valid payload, false on timeout (old poller semantics).
+      return new Promise(function (resolve) {
+        var t0 = Date.now();
+        (function poll() {
           var raw = GM_getValue('tb:' + it.tn, '');
           if (raw) {
-            try {
-              var rec = JSON.parse(raw);
+            var rec = null;
+            try { rec = JSON.parse(raw); } catch (e) { rec = null; }
+            GM_deleteValue('tb:' + it.tn);
+            if (rec) {
               it.date = rec.date || it.date;
               it.dateLabel = 'Date Shipped';
-              setRow(idx, 'done', it.date);
-            } catch (e) { /* malformed — leave row opening */ }
-            GM_deleteValue('tb:' + it.tn);
+              resolve(true);
+              return;
+            }
+            // malformed payload — delete and keep polling (old behaviour)
           }
-        });
-        items.forEach(function (it, idx) { if (rowStatus[idx] === 'opening') allDone = false; });
-        if (allDone) { clearInterval(poller); toast('Done — click cells to copy', true); }
-      }, 800);
+          if (Date.now() - t0 > timeoutMs) { resolve(false); return; }
+          setTimeout(poll, 800);
+        })();
+      });
+    }
+
+    async function openAndExtract() {
+      if (tbExtractBusy) { toast('Extraction already running', false); return; }
+      var items = parseToJSON();
+      if (!items.length) { toast('No tracking numbers to open', false); return; }
+      tbExtractBusy = true;
+      try {
+        currentItems = items;
+        renderTable(items, currentDateLabel);
+        try { GM_setValue('tb:seq', 1); } catch (e) { LOG('seq flag set failed', e); } // keep extractor tabs alive
+        var anyOpen = false;
+        var done = 0, failed = 0;
+        for (var idx = 0; idx < items.length; idx++) {
+          var it = items[idx];
+          var url = carrierUrl(it.tn);
+          if (!url) { setRow(idx, 'failed'); failed++; continue; }
+          GM_deleteValue('tb:' + it.tn); // clear any stale result from a prior run
+          var w = openTbTab(url);
+          if (!w) { setRow(idx, 'failed'); failed++; continue; } // popup blocked
+          anyOpen = true;
+          openedAt[idx] = Date.now();
+          setRow(idx, 'opening');
+          status.textContent = 'Extracting ' + (idx + 1) + '/' + items.length + '…';
+          var ok = await awaitTb(it, 90000);
+          if (ok) { setRow(idx, 'done', it.date); done++; }
+          else { setRow(idx, 'failed'); failed++; }
+        }
+        if (!anyOpen) { toast('⚠ Popups blocked — allow popups for this site', false); return; }
+        status.textContent = done + '/' + items.length + ' extracted. Click cells to copy.';
+        toast(done === items.length ? 'Done — click cells to copy' : done + ' extracted, ' + failed + ' failed', done > 0);
+      } finally {
+        closeTbTab();
+        tbExtractBusy = false;
+      }
     }
 
     /* ============================================================
@@ -768,12 +851,12 @@ console.info('[TrackBus v2.28] boot');
        On the pharmacy subtab (renamed Pharmacy A/Progress/Pharmacy C/
        Pharmacy D...), click Fetch: the portal tab opens with an lfSale
        intent, the Session Handler auto-logs in, the Order Status
-       Extractor sets the last-30-days filter and copies ALL pages,
-       then replies over postMessage. The sheet snaps focus back, the
-       TSV lands on the OS clipboard + textarea, cell A2 is auto-
-       selected, and the user presses Ctrl+V (the ONE trusted step —
-       Sheets refuses synthetic range writes). The portal logs out and
-       the tab self-closes.
+       Extractor sets the configurable blank-days filter and copies
+       ALL pages, then replies over postMessage. The sheet snaps
+       focus back, the TSV lands on the OS clipboard + textarea, cell
+       A2 is auto-selected, and the user presses Ctrl+V (the ONE
+       trusted step — Sheets refuses synthetic range writes). The
+       portal logs out and the tab self-closes.
        ============================================================ */
     var TAB_PHARMACY_MAP = {
       'pharmacya': 'pharmacya',
@@ -799,11 +882,20 @@ console.info('[TrackBus v2.28] boot');
       }
       return key;
     }
+    function fetchDays() {
+      // v2.32 (Jeyson): the fetch range is configurable — the number input
+      // next to the button (persisted in GM storage, default 30).
+      var n = parseInt((daysInput && daysInput.value) || '', 10);
+      if (!n || isNaN(n)) n = 30;
+      if (n < 1) n = 1;
+      if (n > 365) n = 365;
+      return n;
+    }
     function updateFetchLabel() {
       if (!lfFetchBtn) return;
       var apply = function () {
         var key = detectPharmacyFromTab();
-        lfFetchBtn.textContent = key ? ('⬇ Fetch 30 Days (' + pharmDisplay(key) + ')') : '⬇ Fetch 30 Days';
+        lfFetchBtn.textContent = key ? ('⬇ Fetch Blank Days (' + pharmDisplay(key) + ')') : '⬇ Fetch Blank Days';
         return key;
       };
       if (apply()) return;
@@ -826,27 +918,28 @@ console.info('[TrackBus v2.28] boot');
       } catch (e) { console.warn('[TrackBus]', e); }
     }
     function fetchLifeFileOrders() {
+      var days = fetchDays();
       var pharmKey = detectPharmacyFromTab();
-      if (pharmKey) { doLifeFileFetch(pharmKey); return; }
+      if (pharmKey) { doLifeFileFetch(pharmKey, days); return; }
       // The tab bar renders after the panel (Sheets is slow) — wait briefly
       // before complaining, so a fast click still works.
       var tries = 0;
       (function waitPharm() {
         tries++;
         var k = detectPharmacyFromTab();
-        if (k) { doLifeFileFetch(k); return; }
+        if (k) { doLifeFileFetch(k, days); return; }
         if (tries >= 8) { toast('Rename this tab to a pharmacy (Pharmacy A, Progress, Pharmacy C, Pharmacy D…)', false); return; }
         setTimeout(waitPharm, 400);
       })();
     }
-    function doLifeFileFetch(pharmKey) {
+    function doLifeFileFetch(pharmKey, days) {
       var pharm = null;
       for (var i = 0; i < LF_PHARMACY_URL_MAP.length; i++) {
         if (LF_PHARMACY_URL_MAP[i].key === pharmKey) { pharm = LF_PHARMACY_URL_MAP[i]; break; }
       }
       if (!pharm) { toast('Unknown pharmacy tab', false); return; }
       if (lfCleanup) { try { lfCleanup(); } catch (e) {} lfCleanup = null; }
-      var b = buildLfTarget(pharmKey);
+      var b = buildLfTarget(pharmKey, days);
       var nonce = b.nonce;
       var target = b.target;
 
@@ -860,11 +953,11 @@ console.info('[TrackBus v2.28] boot');
       // Snap back to the sheet immediately — the portal tab does its work unseen.
       try { window.focus(); } catch (e) { console.warn('[TrackBus]', e); }
 
-      status.textContent = 'Fetching ' + pharm.name + ' (last 30 days)…';
+      status.textContent = 'Fetching ' + pharm.name + ' (last ' + days + ' days)…';
       waitForLfx(pharm, nonce, lfPortalWin);
     }
     // Build the portal intent URL for a pharmacy.
-    function buildLfTarget(pharmKey) {
+    function buildLfTarget(pharmKey, days) {
       var pharm = null;
       for (var i = 0; i < LF_PHARMACY_URL_MAP.length; i++) {
         if (LF_PHARMACY_URL_MAP[i].key === pharmKey) { pharm = LF_PHARMACY_URL_MAP[i]; break; }
@@ -875,7 +968,7 @@ console.info('[TrackBus v2.28] boot');
         _lf: {
           pharmacy: pharm.key, name: pharm.name,
           portalUrl: statusUrl, loginUrl: pharm.url, step: 'orders',
-          extract: { mode: 'last30', nonce: nonce }
+          extract: { mode: 'days', days: days, nonce: nonce }
         }
       };
       var b64 = btoa(encodeURIComponent(JSON.stringify(intent))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -936,291 +1029,11 @@ console.info('[TrackBus v2.28] boot');
       };
     }
 
-    /* ============================================================
-       WRITE BACK (v2.11) — Jeyson's ideal workflow
-       Replace the tracking-number-only cells (bare TN text OR the sheet's
-       HYPERLINK formula cell) with the full "Date Shipped + TN" blob.
-       Uses ONLY verified mechanics (google-sheets-automation.md):
-       - Sheets' native Find (#docs-findbar-input + Enter) selects the cell
-       - the formula bar (#t-formula-bar-input .cell-input) shows the selected
-         cell's content — that is the read-before-write guard
-       - #t-name-box gives the cell ref — writes only happen in column H
-       - constructed ClipboardEvent('paste') + synthetic Enter COMMITS
-       Every write is guarded; anything ambiguous is SKIPPED, never overwritten.
-       ============================================================ */
-
-    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-
-    function ensureFindbar() {
-      return new Promise(function (resolve) {
-        var fb = document.querySelector('#docs-findbar');
-        if (fb && fb.offsetParent !== null) { resolve(true); return; }
-        toast('Press Ctrl+F to open Find, then wait…', true);
-        var obs = new MutationObserver(function () {
-          var f2 = document.querySelector('#docs-findbar');
-          if (f2 && f2.offsetParent !== null) { obs.disconnect(); resolve(true); }
-        });
-        obs.observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(function () { obs.disconnect(); resolve(false); }, 20000);
-      });
-    }
-
-    function findAndSelect(tn) {
-      return new Promise(function (resolve) {
-        var input = document.querySelector('#docs-findbar-input');
-        if (!input) { resolve(false); return; }
-        input.focus();
-        var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        setter.call(input, tn);
-        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: tn }));
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        var t0 = Date.now();
-        (function poll() {
-          var nb = document.querySelector('#t-name-box');
-          var ref = nb ? nb.textContent.trim() : '';
-          if (ref && /H\d+$/i.test(ref)) { resolve(ref); return; }
-          if (Date.now() - t0 > 6000) { resolve(ref || false); }
-          setTimeout(poll, 300);
-        })();
-      });
-    }
-
-    function readCell() {
-      var el = document.querySelector('#t-formula-bar-input .cell-input');
-      return el ? (el.textContent || '').trim() : '';
-    }
-
-    function writeCell(value) {
-      return new Promise(function (resolve) {
-        var input = document.querySelector('#t-formula-bar-input .cell-input');
-        if (!input) { resolve(false); return; }
-        input.focus();
-        var dt = new DataTransfer();
-        dt.setData('text/plain', value);
-        var ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
-        input.dispatchEvent(ev);
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        setTimeout(function () { resolve(ev.defaultPrevented === true); }, 700);
-      });
-    }
-
-    function blobFor(it) {
-      return '\nDate Shipped: ' + it.date + '\nTN: ' + (it.carrier ? it.carrier + ' - ' : '') + it.tn;
-    }
-
-    async function writeBack() {
-      var items = currentItems && currentItems.length ? currentItems : parseToJSON();
-      var bare = items.filter(function (it) { return it.tn && it.date && !it.hadBlob; });
-      if (!bare.length) { toast('No bare-TN rows with extracted dates — run Open & Extract first', false); return; }
-      renderTable(items, currentDateLabel);
-      var fbOk = await ensureFindbar();
-      if (!fbOk) { toast('Find bar never appeared — press Ctrl+F, then click Write Back again', false); return; }
-      var written = 0, skipped = 0, failed = 0;
-      for (var i = 0; i < items.length; i++) {
-        var it = items[i];
-        if (!it.tn || !it.date || it.hadBlob) continue;
-        setRow(i, 'opening');
-        var ref = await findAndSelect(it.tn);
-        if (!ref || !/H\d+$/i.test(ref)) { setRow(i, 'failed'); failed++; continue; }
-        await sleep(400);
-        var content = readCell();
-        if (content.indexOf('Date Shipped') !== -1) { setRow(i, 'skip'); skipped++; continue; }   // already a blob
-        if (content !== it.tn && !/^\s*=/.test(content)) { setRow(i, 'skip'); skipped++; continue; } // not bare TN or formula — never overwrite
-        var took = await writeCell(blobFor(it));
-        await sleep(800);
-        var after = readCell();
-        if (took && after.indexOf('Date Shipped') !== -1) { setRow(i, 'done', it.date); written++; }
-        else { setRow(i, 'failed'); failed++; }
-      }
-      toast('Write-back: ' + written + ' written, ' + skipped + ' skipped, ' + failed + ' failed', written > 0);
-    }
-
-    /* ============================================================
-       SWEEP SHIP DATES (v2.28) — fill the sheet's unfilled Date
-       Shipped cells in place: scan the sheet DATA (internal gviz
-       CSV endpoint — robust against the grid's virtualized DOM and
-       slow renders), find TN cells lacking 'Date Shipped', open
-       each carrier link (rebuilt via carrierUrl — same logic as
-       the sheet's own formula), let the extractor publish tb:<tn>,
-       then write the blob back to the target column (auto-detected
-       by header name — "Date Shipped / Tracking #").
-       ============================================================ */
-    var sweepState = null; // { items, outputCol, error }
-
-    function parseCsv(text) {
-      // Quoted-aware CSV parser (blob cells contain \n inside quotes).
-      var rows = []; var row = []; var cur = ''; var inQ = false;
-      for (var i = 0; i < text.length; i++) {
-        var ch = text[i];
-        if (ch === '\r') continue;
-        if (inQ) {
-          if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
-          else cur += ch;
-        } else if (ch === '"') { inQ = true; }
-        else if (ch === ',') { row.push(cur); cur = ''; }
-        else if (ch === '\n') { row.push(cur); cur = ''; rows.push(row); row = []; }
-        else cur += ch;
-      }
-      if (cur.length || row.length) { row.push(cur); rows.push(row); }
-      return rows;
-    }
-
-    async function scanViaGviz() {
-      // Read the active tab's data straight from the sheet (same-origin,
-      // session cookie). Finds the "Date Shipped" column by header name.
-      var m = location.pathname.match(/\/d\/([^/]+)/);
-      var gid = (location.hash.match(/gid=(\d+)/) || [null, '0'])[1];
-      if (!m) return { items: [], outputCol: null, error: 'no doc id in URL' };
-      try {
-        var res = await fetch('/spreadsheets/d/' + m[1] + '/gviz/tq?tqx=out:csv&gid=' + gid);
-        if (!res.ok) return { items: [], outputCol: null, error: 'gviz ' + res.status };
-        var rows = parseCsv(await res.text());
-        var headerIdx = -1, targetCol = -1;
-        for (var r = 0; r < Math.min(rows.length, 5); r++) {
-          for (var c = 0; c < rows[r].length; c++) {
-            if (String(rows[r][c]).indexOf('Date Shipped') !== -1) { headerIdx = r; targetCol = c; break; }
-          }
-          if (headerIdx >= 0) break;
-        }
-        if (targetCol < 0) return { items: [], outputCol: null, error: 'no "Date Shipped" column found' };
-        var items = []; var seen = {};
-        for (var i = headerIdx + 1; i < rows.length; i++) {
-          var cell = String(rows[i][targetCol] || '').trim();
-          if (!cell || cell.indexOf('Date Shipped') !== -1) continue; // empty or already a blob
-          var tn = extractTN(cell);
-          if (!tn || seen[tn]) continue;
-          seen[tn] = 1;
-          items.push({ tn: tn, patient: String(rows[i][4] || '').trim(), row: i + 1, col: targetCol + 1, date: '', carrier: carrierOf(tn) });
-        }
-        return { items: items, outputCol: targetCol + 1, error: '' };
-      } catch (e) {
-        return { items: [], outputCol: null, error: String((e && e.message) || e) };
-      }
-    }
-
-    function colLetter(colIdx) {
-      var s = ''; colIdx = colIdx - 1; // 1-based → 0-based
-      while (colIdx >= 0) { s = String.fromCharCode(65 + (colIdx % 26)) + s; colIdx = Math.floor(colIdx / 26) - 1; }
-      return s;
-    }
-
-    function selectCellRef(ref) {
-      // Name-box navigation: "M123" + Enter selects that cell (same UI path
-      // the sheet's own Go-To uses). Returns true if the selection landed.
-      return new Promise(function (resolve) {
-        var nb = document.querySelector('#t-name-box');
-        if (!nb) { resolve(false); return; }
-        nb.focus();
-        var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        setter.call(nb, ref);
-        nb.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ref }));
-        nb.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        nb.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        setTimeout(function () {
-          var cur = document.querySelector('#t-name-box');
-          resolve(cur ? (cur.value || '').trim().toUpperCase() === ref.toUpperCase() : false);
-        }, 600);
-      });
-    }
-
-    async function sweepExtractBatch(batch) {
-      // Phase B: open each item's carrier link (own href preferred), poll
-      // tb:<tn> until every item resolves or 90s elapses. Extractor tabs
-      // self-close after publishing, so tab count stays bounded.
-      batch.forEach(function (it) {
-        GM_deleteValue('tb:' + it.tn);
-        var w = window.open(carrierUrl(it.tn), '_blank');
-        if (!w) it._fail = 'popup';
-      });
-      var t0 = Date.now();
-      for (;;) {
-        var pending = batch.filter(function (it) { return !it.date && !it._fail; });
-        if (!pending.length) break;
-        if (Date.now() - t0 > 90000) break;
-        await sleep(800);
-        pending.forEach(function (it) {
-          var raw = GM_getValue('tb:' + it.tn, '');
-          if (raw) {
-            try { var rec = JSON.parse(raw); it.date = rec.date || ''; it.carrier = rec.carrier || it.carrier; }
-            catch (e) { LOG('malformed tb payload for', it.tn); }
-            GM_deleteValue('tb:' + it.tn);
-          }
-        });
-      }
-    }
-
-    async function sweepWrite(item) {
-      // Phase C: write the blob — to the detected output column (name-box
-      // select), or in-place via find-by-TN. Guard is intentionally lighter
-      // than Write Back's H-guard: sweep MUST consume =HYPERLINK cells (the
-      // preview was the approval); only a race-gained blob is skipped.
-      var ref = null;
-      if (sweepState.outputCol && item.row) {
-        ref = colLetter(sweepState.outputCol) + item.row;
-        var ok = await selectCellRef(ref);
-        if (!ok) ref = null; // name-box failed → fall back to find-by-TN
-      }
-      if (!ref) {
-        var fb = await ensureFindbar();
-        if (!fb) return 'failed';
-        ref = await findAndSelect(item.tn);
-        if (!ref) return 'failed';
-      }
-      await sleep(400);
-      var content = readCell();
-      if (content.indexOf('Date Shipped') !== -1) return 'skip'; // already a blob (race)
-      if (!item.date) return 'failed'; // extractor never published / popup blocked
-      var took = await writeCell(blobFor(item));
-      await sleep(800);
-      var after = readCell();
-      return (took && after.indexOf('Date Shipped') !== -1) ? 'done' : 'failed';
-    }
-
-    async function sweepRun() {
-      if (!sweepState || !sweepState.items || !sweepState.items.length) { toast('Nothing to sweep — scan first', false); return; }
-      var items = sweepState.items;
-      var BATCH = 8;
-      var done = 0, skipped = 0, failed = 0;
-      sweepBtn.disabled = true;
-      for (var b = 0; b < items.length; b += BATCH) {
-        var batch = items.slice(b, b + BATCH);
-        sweepBtn.textContent = 'Sweeping… ' + Math.min(b + BATCH, items.length) + '/' + items.length;
-        await sweepExtractBatch(batch);
-        for (var i = 0; i < batch.length; i++) {
-          var st = await sweepWrite(batch[i]);
-          if (st === 'done') { done++; setRow(items.indexOf(batch[i]), 'done', batch[i].date); }
-          else if (st === 'skip') { skipped++; setRow(items.indexOf(batch[i]), 'skip'); }
-          else { failed++; setRow(items.indexOf(batch[i]), 'failed'); }
-        }
-        toast('Sweep: ' + done + ' done, ' + skipped + ' skipped, ' + failed + ' failed — continuing', done > 0);
-      }
-      sweepBtn.disabled = false;
-      sweepBtn.textContent = '🧹 Sweep Ship Dates';
-      sweepState = null;
-      toast('Sweep complete: ' + done + ' written, ' + skipped + ' skipped, ' + failed + ' failed', done > 0);
-    }
-
-    async function sweepGo() {
-      // Click 1: scan + preview (opens nothing). Click 2: confirm + run.
-      if (sweepState && sweepState.items && sweepState.items.length) { sweepRun(); return; }
-      status.textContent = 'Scanning sheet data…';
-      var res = await scanViaGviz();
-      sweepState = res;
-      if (res.error) { status.textContent = 'Sweep scan failed: ' + res.error; sweepState = null; return; }
-      if (!res.items.length) { status.textContent = 'No unfilled tracking cells found.'; sweepState = null; return; }
-      currentItems = res.items;
-      renderTable(res.items);
-      status.textContent = 'Sweep: ' + res.items.length + ' cell(s) to fill in column ' + colLetter(res.outputCol) +
-        ' ("Date Shipped / Tracking #"). Click 🧹 again to confirm & run.';
-      toast('Preview ready — click 🧹 again to run', true);
-    }
-
     function go() {
       var items = parseToJSON();
       currentItems = items;
       renderTable(items);
+      pulse(driveBtn); // v2.29: next step is Open & Extract
     }
 
     var CSS = [
@@ -1249,8 +1062,131 @@ console.info('[TrackBus v2.28] boot');
       'margin-bottom:6px;font-weight:600;cursor:move}',
       '#tb-results-body{overflow:auto;max-height:68vh}',
       '#tb-results.collapsed #tb-results-body{display:none}',
-      '#tb-lf-fetch{background:var(--ds-info,#2c6e9c)}'
+      '#tb-lf-fetch{background:var(--ds-info,#2c6e9c)}',
+      // v2.32 (Jeyson): fetch row = days input + Fetch Blank Days button
+      '#tb-fetch-row{display:flex;gap:6px;margin-top:6px}',
+      '#tb-fetch-row button{margin-top:0;flex:1}',
+      '#tb-days{width:56px;padding:5px;border:1px solid var(--ds-border,#444);border-radius:4px;',
+      'background:var(--ds-surface,#111);color:var(--ds-text,#eee);font:12px system-ui,sans-serif;text-align:center}',
+      // v2.29: affordances — hover cues, click flash, next-action pulse, guide mode
+      '.tb-copy-cell{cursor:pointer;transition:background .15s ease}',
+      '.tb-copy-cell:hover{background:rgba(138,95,46,.18)!important;outline:1px dashed rgba(138,95,46,.6);outline-offset:-1px}',
+      '.tb-flash{animation:tbFlash .7s ease-out}',
+      '@keyframes tbFlash{0%{background:rgba(61,122,70,.45)}100%{background:transparent}}',
+      '.tb-pulse{animation:tbPulse 1.3s ease-in-out 3}',
+      '@keyframes tbPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,196,90,.65)}50%{box-shadow:0 0 0 6px rgba(255,196,90,0)}}',
+      '#tb-guide{position:fixed;top:16px;right:16px;z-index:2147483646;width:300px;',
+      'background:var(--ds-surface,#1e1e1e);color:var(--ds-text,#eee);border:1px solid rgba(255,196,90,.6);',
+      'border-radius:8px;padding:10px 12px;font:12px/1.5 system-ui,sans-serif;',
+      'box-shadow:0 4px 16px rgba(31,45,61,.25)}',
+      '#tb-guide h4{margin:0 0 6px;font-size:12px;color:var(--ds-accent,#8a5f2e)}',
+      '#tb-guide ol{margin:0;padding-left:18px}',
+      '#tb-guide li{margin:2px 0}',
+      '#tb-guide b{color:var(--ds-accent,#8a5f2e)}',
+      '#tb-guide-close{position:absolute;top:6px;right:8px;cursor:pointer;border:0;background:none;color:var(--ds-muted,#998);font-size:13px;width:auto;margin:0;padding:2px 6px}',
+      '.tb-guide-ring{position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #ffb43c;border-radius:6px;animation:tbPulse 1.4s ease-in-out infinite}',
+      '.tb-guide-num{position:fixed;z-index:2147483646;pointer-events:none;background:#ffb43c;color:#2b2620;font:700 11px/18px system-ui,sans-serif;',
+      'width:18px;height:18px;text-align:center;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.4)}',
+      '#tb-results.collapsed #tb-results-foot{display:none}'
     ].join('');
+
+    /* ============================================================
+       v2.29 GUIDE MODE — show what to hover / click
+       ============================================================ */
+    var guideEl = null, guideTimer = null, guideTimeout = null;
+    var GUIDE_STEPS = [
+      { label: 'Paste box', desc: 'Paste the sheet rows here (or use ⬇ Fetch Blank Days first).' },
+      { label: '⬇ Fetch Blank Days', desc: 'Pulls orders for the last N days (set N in the box next to it) from the pharmacy named on the ACTIVE tab. Press Ctrl+V at A2 when told.' },
+      { label: 'Parse to Table', desc: 'Turns the paste into the results table.' },
+      { label: 'Open & Extract', desc: 'Opens every tracking # on UPS/FedEx — the tabs close by themselves. Watch for ✓.' },
+      { label: 'Results table', desc: 'Click any highlighted cell to copy — patient, carrier, tracking #, or date.' },
+      { label: '✕ (first column)', desc: 'Removes that row from the table — the sheet is never touched.' },
+      { label: 'Panel titles', desc: 'Drag to move either panel wherever you like.' }
+    ];
+
+    function pulse(btnEl) {
+      if (!btnEl) return;
+      btnEl.classList.remove('tb-pulse'); void btnEl.offsetWidth; btnEl.classList.add('tb-pulse');
+    }
+
+    function removeGuideRings() {
+      var els = document.querySelectorAll('.tb-guide-ring, .tb-guide-num');
+      for (var i = 0; i < els.length; i++) els[i].remove();
+    }
+
+    function placeGuideRings() {
+      removeGuideRings();
+      var targets = [box, lfFetchBtn, btn, driveBtn];
+      targets.forEach(function (t, i) {
+        if (!t) return;
+        var r = t.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        var ring = document.createElement('div');
+        ring.className = 'tb-guide-ring';
+        ring.style.cssText = 'left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;height:' + r.height + 'px';
+        document.documentElement.appendChild(ring);
+        var num = document.createElement('div');
+        num.className = 'tb-guide-num';
+        num.textContent = i + 1;
+        num.style.left = (r.left - 9) + 'px';
+        num.style.top = (r.top - 9) + 'px';
+        document.documentElement.appendChild(num);
+      });
+      if (resultsPanel && !resultsPanel.classList.contains('collapsed')) {
+        var rr = resultsPanel.getBoundingClientRect();
+        if (rr.width && rr.height) {
+          var ring2 = document.createElement('div');
+          ring2.className = 'tb-guide-ring';
+          ring2.style.cssText = 'left:' + rr.left + 'px;top:' + rr.top + 'px;width:' + rr.width + 'px;height:' + rr.height + 'px';
+          document.documentElement.appendChild(ring2);
+        }
+      }
+    }
+
+    function hideGuide() {
+      if (guideTimer) { clearInterval(guideTimer); guideTimer = null; }
+      if (guideTimeout) { clearTimeout(guideTimeout); guideTimeout = null; }
+      removeGuideRings();
+      if (guideEl) { guideEl.remove(); guideEl = null; }
+    }
+
+    function showGuide() {
+      if (guideEl) { hideGuide(); return; }
+      guideEl = document.createElement('div');
+      guideEl.id = 'tb-guide';
+      var h = document.createElement('h4');
+      h.textContent = 'Tracking Bus — quick guide';
+      var close = document.createElement('button');
+      close.id = 'tb-guide-close';
+      close.textContent = '✕';
+      close.title = 'Close the guide';
+      close.onclick = hideGuide;
+      var ol = document.createElement('ol');
+      GUIDE_STEPS.forEach(function (s) {
+        var li = document.createElement('li');
+        var b = document.createElement('b');
+        b.textContent = s.label + ' — ';
+        li.appendChild(b);
+        li.appendChild(document.createTextNode(s.desc));
+        ol.appendChild(li);
+      });
+      guideEl.appendChild(h);
+      guideEl.appendChild(close);
+      guideEl.appendChild(ol);
+      document.documentElement.appendChild(guideEl);
+      try { localStorage.setItem('tb_guide_seen', '1'); } catch (e) { console.warn('[TrackBus]', e); }
+      guideTimer = setInterval(placeGuideRings, 800);
+      placeGuideRings();
+      guideTimeout = setTimeout(function () { if (guideEl) hideGuide(); }, 60000);
+    }
+
+    function toggleGuide() {
+      if (guideEl) hideGuide(); else showGuide();
+    }
+
+    function onGuideKey(e) {
+      if (e.key === 'Escape') hideGuide();
+    }
 
     function build() {
       GM_addStyle(CSS);
@@ -1270,28 +1206,34 @@ console.info('[TrackBus v2.28] boot');
 
       btn = document.createElement('button');
       btn.textContent = 'Parse to Table';
+      btn.title = 'Turn the pasted rows into the results table';
       btn.onclick = go;
 
       driveBtn = document.createElement('button');
       driveBtn.textContent = 'Open & Extract';
       driveBtn.style.background = '#36c';
+      driveBtn.title = 'Open every tracking # on UPS/FedEx and extract the ship date — the tabs close by themselves';
       driveBtn.onclick = openAndExtract;
-
-      writeBtn = document.createElement('button');
-      writeBtn.textContent = 'Write Back to Sheet';
-      writeBtn.style.background = '#e67e22';
-      writeBtn.onclick = writeBack;
-
-      sweepBtn = document.createElement('button');
-      sweepBtn.textContent = '🧹 Sweep Ship Dates';
-      sweepBtn.style.background = '#7c5cfc';
-      sweepBtn.title = 'Scan the grid for unfilled Date Shipped cells, open each carrier link, extract, write back. Click once to preview, again to run.';
-      sweepBtn.onclick = sweepGo;
 
       lfFetchBtn = document.createElement('button');
       lfFetchBtn.id = 'tb-lf-fetch';
-      lfFetchBtn.textContent = '⬇ Fetch 30 Days';
+      lfFetchBtn.textContent = '⬇ Fetch Blank Days';
+      lfFetchBtn.title = 'Fetch the last N days of orders from the pharmacy named on the active tab — press Ctrl+V at A2 when told (N is the box next to it)';
       lfFetchBtn.onclick = fetchLifeFileOrders;
+      daysInput = document.createElement('input');
+      daysInput.id = 'tb-days';
+      daysInput.type = 'number';
+      daysInput.min = '1';
+      daysInput.max = '365';
+      daysInput.title = 'How many days back to fetch — blank days to fill';
+      try { daysInput.value = String(GM_getValue('tb:fetchDays', 30)); } catch (e) { daysInput.value = '30'; }
+      daysInput.addEventListener('change', function () {
+        try { GM_setValue('tb:fetchDays', fetchDays()); } catch (e) { console.warn('[TrackBus]', e); }
+      });
+      var fetchRow = document.createElement('div');
+      fetchRow.id = 'tb-fetch-row';
+      fetchRow.appendChild(daysInput);
+      fetchRow.appendChild(lfFetchBtn);
       updateFetchLabel();
 
       status = document.createElement('div');
@@ -1299,6 +1241,8 @@ console.info('[TrackBus v2.28] boot');
 
       panel.appendChild(head);
       panel.appendChild(box);
+      // v2.32 (Jeyson): button order = 1. Fetch Blank Days 2. Parse 3. Open & Extract
+      panel.appendChild(fetchRow);
       panel.appendChild(btn);
       panel.appendChild(driveBtn);
       // Draggable panels (v2.22/v2.23, Jeyson): grab the ⠿ handle (or the
@@ -1337,13 +1281,20 @@ console.info('[TrackBus v2.28] boot');
       }
       var panelHead = document.createElement('div');
       panelHead.id = 'tb-panel-head';
-      panelHead.textContent = '⠿ Tracking Bus';
-      panelHead.style.cssText = 'user-select:none;font-weight:bold;margin-bottom:6px;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,0.08);';
+      panelHead.style.cssText = 'user-select:none;font-weight:bold;margin-bottom:6px;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;';
+      var phLabel = document.createElement('span');
+      phLabel.textContent = '⠿ Tracking Bus';
+      panelHead.appendChild(phLabel);
+      // v2.29: ? toggles the guide (what to hover / click)
+      var guideBtn = document.createElement('button');
+      guideBtn.textContent = '?';
+      guideBtn.title = 'Show the guide — what to hover and click';
+      guideBtn.style.cssText = 'width:auto;margin:0;padding:0 8px;font-weight:700;background:rgba(255,255,255,0.14);border-radius:4px;cursor:pointer;border:0;color:var(--ds-text,#eee);font-size:12px;line-height:18px';
+      guideBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      guideBtn.onclick = toggleGuide;
+      panelHead.appendChild(guideBtn);
       makeDraggable(panel, panelHead, 'tb_panel_pos');
       panel.insertBefore(panelHead, panel.firstChild);
-      panel.appendChild(lfFetchBtn);
-      panel.appendChild(writeBtn);
-      panel.appendChild(sweepBtn);
       panel.appendChild(status);
 
       resultsPanel = document.createElement('div');
@@ -1356,15 +1307,35 @@ console.info('[TrackBus v2.28] boot');
       rH1.id = 'tb-results-title';
       rH1.textContent = 'Tracking Bus — Results';
       rHead.appendChild(rH1);
+      // v2.29: ? toggles the guide (what to hover / click)
+      var rGuide = document.createElement('button');
+      rGuide.textContent = '?';
+      rGuide.title = 'Show the guide — what to hover and click';
+      rGuide.style.cssText = 'width:auto;margin:0;padding:0 8px;font-weight:700;background:rgba(255,255,255,0.14);border-radius:4px;cursor:pointer;border:0;color:var(--ds-text,#eee);font-size:12px;line-height:18px';
+      rGuide.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      rGuide.onclick = toggleGuide;
+      rHead.appendChild(rGuide);
       makeDraggable(resultsPanel, rH1, 'tb_results_pos');
       resultsBody = document.createElement('div');
       resultsBody.id = 'tb-results-body';
       resultsPanel.appendChild(rHead);
       resultsPanel.appendChild(resultsBody);
+      // v2.29: legend — what's clickable, at a glance
+      var rFoot = document.createElement('div');
+      rFoot.id = 'tb-results-foot';
+      rFoot.textContent = 'Click highlighted cells to copy · ✕ removes a row · Drag titles to move panels';
+      rFoot.style.cssText = 'margin-top:6px;font-size:11px;color:var(--ds-muted,#998);border-top:1px solid var(--ds-border,#e8e2d8);padding-top:4px';
+      resultsPanel.appendChild(rFoot);
 
       document.documentElement.appendChild(resultsPanel);
       document.documentElement.appendChild(panel);
       LOG('panel mounted');
+      // v2.29: first-run coach — show the guide once so the hover/click
+      // targets are obvious from the start (then only via the ? button).
+      try {
+        if (!localStorage.getItem('tb_guide_seen')) showGuide();
+      } catch (e) { console.warn('[TrackBus]', e); }
+      document.addEventListener('keydown', onGuideKey);
     }
 
     if (document.readyState === 'loading') {
@@ -1372,6 +1343,20 @@ console.info('[TrackBus v2.28] boot');
     } else {
       build();
     }
+
+    // R18: trigger dispatcher (set by runController so it has closure access)
+    var api = window.__scripts['TrackBus'];
+    api.trigger = function (action) {
+      if (action === 'extract') {
+        api.state = 'running'; api.message = 'Opening tabs & extracting...'; api.progress = null; api.lastActivity = Date.now();
+        openAndExtract();
+        return { ok: true };
+      }
+      if (action === 'status') {
+        return { ok: true, state: api.state, message: api.message, progress: api.progress };
+      }
+      return { ok: false, error: 'unknown action: ' + action };
+    };
   }
 
   /* ============================================================

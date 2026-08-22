@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name Select text inside a link like Opera
-// @version 6.0.2
+// @version 6.0.3
 // @description Disable link dragging and select text.
 // @homepageURL https://github.com/eight04/select-text-inside-a-link-like-opera#readme
 // @supportURL https://github.com/eight04/select-text-inside-a-link-like-opera/issues
@@ -16,7 +16,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[OperaSelect v6.0.2] boot');
+console.info('[OperaSelect v6.0.3] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['OperaSelect'] = { name: 'Select text inside a link like Opera', version: '6.0.3', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 // const IS_FIREFOX = typeof InstallTrigger !== 'undefined';
 // const tracker = IS_FIREFOX && createMovementTracker();

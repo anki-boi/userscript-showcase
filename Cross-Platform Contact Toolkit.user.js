@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cross-Platform Contact Toolkit
 // @namespace    http://tampermonkey.net/
-// @version      7.27
+// @version      7.29
 // @author       Jeyson Dagondon
 // @description  Unified toolbar: copy name+link, cross-platform search, LifeFile order check
 // @match        https://app.gohighlevel.com/*
@@ -22,7 +22,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[Toolkit v7.27] boot');
+console.info('[Toolkit v7.29] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', version: '7.29', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -438,6 +442,16 @@ console.info('[Toolkit v7.27] boot');
     return (el.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
+  // RC conversation labels append the patient's coach in parens —
+  // "Jeyson Dagondon (Nicole)". Strip it so copies carry only the patient.
+  // Phone-shaped labels (unknown contacts, e.g. "(716) 807-4316") must stay
+  // intact — a 7+ digit run means it's a number, not a name.
+  function stripCoachSuffix(n) {
+    const digits = (n.match(/\d/g) || []).length;
+    if (digits >= 7) return n;
+    return n.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
   function getPatientIdEl() {
     if (IS_RXFLOW) {
       return [...document.querySelectorAll('.show_pat_content')].find((el) => {
@@ -511,8 +525,11 @@ console.info('[Toolkit v7.27] boot');
     const nameEl = getNameEl();
     if (!nameEl) return;
 
-    const name = readName(nameEl);
-    if (!name) return;
+    const rawName = readName(nameEl);
+    if (!rawName) return;
+    // RC labels carry the coach in parens ("Patient (Coach)") — strip for
+    // copy/search parity with the other platforms' buttons.
+    const name = IS_RC ? stripCoachSuffix(rawName) : rawName;
 
     // Read Patient ID on RxFlow
     let patientId = null;

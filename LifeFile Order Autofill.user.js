@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LifeFile Order Autofill
 // @namespace    http://tampermonkey.net/
-// @version      1.14
+// @version      1.18
 // @author       Jeyson Dagondon
 // @description  One-click LifeFile order autofill: step-1 auto-submit, patient search-or-create
 // @match        https://hostB.lifefile.net/*
@@ -14,7 +14,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Autofill v1.14] boot');
+console.info('[LF-Autofill v1.18] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1.18', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -36,6 +40,12 @@ console.info('[LF-Autofill v1.14] boot');
         'UPS NEXT DAY AIR',
         'NEXT DAY AIR',
     ];
+
+    // Pharmacy G (LDN): its delivery dropdown only offers Clinic-pay / patient-pay
+    // options — there is no FEDEX/UPS choice, so DELIVERY_PRIORITY can't match.
+    const PHARMACY_F_DELIVERY = 'PATIENT PAY ONLY - SHIPPING TBD';
+    // Supervising Prescriber on the order form — the clinic always authorizes Finley.
+    const SUPERVISING_PRESCRIBER = 'FINLEY LAURA';
 
     // Payment profile: preferred payee names, in priority order.
     const PROFILE_PRIORITY = ['Jones', 'Finley'];
@@ -246,6 +256,10 @@ console.info('[LF-Autofill v1.14] boot');
 
     // Find an option matching one of the priority labels.
     function matchOption(select, priorityList) {
+        // Guard: the element may be a hidden input / custom widget with no
+        // .options (LifeFile changed sel_authorize_provider 2026-08-13) — treat
+        // as "no match" instead of crashing on Array.from(undefined).
+        if (!select || !select.options || !select.options.length) return null;
         const opts = Array.from(select.options);
         for (const target of priorityList) {
             const t = norm(target);
@@ -383,11 +397,44 @@ console.info('[LF-Autofill v1.14] boot');
             log('Pharmacy:', pharmacy || 'UNKNOWN');
 
             // 1. Delivery method (ALWAYS first — reveals residential options)
+            //    Pharmacy G's dropdown only offers clinic-pay / patient-pay options,
+            //    so detect it by its signature option and pick the fixed value.
             const delivery = document.querySelector('#sel_delivery_method');
             if (!delivery) throw new Error('delivery method select not found');
-            const dval = matchOption(delivery, DELIVERY_PRIORITY);
+            const isPharmacyF = Array.from(delivery.options).some((o) => norm(o.textContent).includes('PATIENT PAY ONLY'));
+            let dval = isPharmacyF
+                ? matchOption(delivery, [PHARMACY_F_DELIVERY])
+                : matchOption(delivery, DELIVERY_PRIORITY);
             if (!dval) { glow(delivery); throw new Error('no matching delivery option'); }
             if (!setSelect(delivery, dval)) glow(delivery);
+            // Pharmacy G: the same option also drives the Delivery Service select below it.
+            if (isPharmacyF) {
+                const shipService = document.querySelector('#sel_shipping_service');
+                if (shipService) {
+                    const sv = matchOption(shipService, [PHARMACY_F_DELIVERY]);
+                    if (sv && !setSelect(shipService, sv)) glow(shipService);
+                }
+            }
+
+            // 1b. Supervising Prescriber — the clinic always authorizes Finley
+            //     (Laura Finley). Set wherever the option exists; glow if it
+            //     can't be matched so the operator picks it manually.
+            //     LifeFile changed this to a hidden input the server pre-defaults
+            //     (2026-08-13): a non-select with a value is trusted as filled.
+            const prescriber = document.querySelector('#sel_authorize_provider');
+            if (prescriber) {
+                if (prescriber.options && prescriber.options.length) {
+                    // Real <select> — existing logic.
+                    const pv = matchOption(prescriber, [SUPERVISING_PRESCRIBER]);
+                    if (pv) { if (!setSelect(prescriber, pv)) glow(prescriber); }
+                    else glow(prescriber);
+                } else if (String(prescriber.value || '').trim() !== '') {
+                    // Hidden input / custom widget — trust the server default.
+                    console.log('[LifeFile Autofill] sel_authorize_provider is not a select; trusting server default:', prescriber.value);
+                } else {
+                    glow(prescriber);
+                }
+            }
 
             await sleep(1000);
 
@@ -657,45 +704,111 @@ console.info('[LF-Autofill v1.14] boot');
         return null;
     }
 
-    // On the patient-search page with an active sale intent: search by name, then
-    // pick the matching patient (Select → chain) or open the new-patient form.
+    // On the patient-search page with an active sale intent: try every word-boundary
+    // split of the full name (permutation search), pick the matching patient
+    // (Select → chain), or open the new-patient form when nothing matches.
     async function trySearchPatient() {
         if (location.pathname.indexOf('/poe/searchpatient') === -1) return false;
         const intent = getSaleIntent();
         if (!intent || !intent.firstName || !intent.lastName) return false;
         if (isOrderCheck()) return false; // orders mode never runs the sale search
 
-        const searchKey = `${intent.lastName}, ${intent.firstName}`.toUpperCase();
-        let doneKey = '';
-        try { doneKey = sessionStorage.getItem(SEARCHED_KEY) || ''; } catch(e) { console.warn('[LF-Autofill]', e); }
+        // Permutation state persisted in sessionStorage so a full-page POST reload
+        // (which re-runs this script) continues from the same split, not from 0.
+        const PERM_LIST_KEY = 'lf_perm_list';
+        const PERM_IDX_KEY = 'lf_perm_idx';
+        const PERM_GUARD_KEY = 'lf_perm_guard';
+        const guardKey = `${intent.lastName}, ${intent.firstName}`.toUpperCase(); // original extractor search key
 
-        if (doneKey !== searchKey) {
-            const box = document.querySelector('#txt_search');
-            const btn = document.querySelector('#btn_search_button');
-            if (!box || !btn) return false;
-            const nameRadio = document.querySelector('#rad_search_type-name');
-            if (nameRadio && !nameRadio.checked) nameRadio.checked = true;
-            statusNote(`Searching ${intent.lastName}, ${intent.firstName}…`);
-            try { sessionStorage.setItem(SEARCHED_KEY, searchKey); } catch(e) { console.warn('[LF-Autofill]', e); }
-            setInput(box, `${intent.lastName}, ${intent.firstName}`);
-            clickEl(btn);
+        const clearPermState = () => {
+            try { sessionStorage.removeItem(PERM_LIST_KEY); } catch(e) { console.warn('[LF-Autofill]', e); }
+            try { sessionStorage.removeItem(PERM_IDX_KEY); } catch(e) { console.warn('[LF-Autofill]', e); }
+            try { sessionStorage.removeItem(PERM_GUARD_KEY); } catch(e) { console.warn('[LF-Autofill]', e); }
+        };
+        const clearSearchedKey = () => {
+            try { sessionStorage.removeItem(SEARCHED_KEY); } catch(e) { console.warn('[LF-Autofill]', e); }
+        };
+
+        // Every word-boundary split of the full name. allWords[0..i] = first name,
+        // allWords[i+1..] = last name, for i in 0..len-2 (never empty either side).
+        const allWords = `${intent.firstName} ${intent.lastName}`.trim().split(/\s+/).filter(Boolean);
+        const maxI = allWords.length - 2;
+        const origI = intent.firstName.trim().split(/\s+/).filter(Boolean).length - 1;
+        const indices = [];
+        const pushI = (i) => { if (i >= 0 && i <= maxI && indices.indexOf(i) === -1) indices.push(i); };
+        pushI(origI); // original extractor split FIRST
+        pushI(0);     // whole-surname split next
+        for (let i = 1; i <= maxI; i++) pushI(i); // then remaining boundaries ascending
+        let perms = [];
+        const seen = new Set();
+        for (const i of indices) {
+            const first = allWords.slice(0, i + 1).join(' ');
+            const last = allWords.slice(i + 1).join(' ');
+            const key = `${last}, ${first}`.toUpperCase();
+            if (seen.has(key)) continue; // dedupe on 'LAST, FIRST'
+            seen.add(key);
+            perms.push({ first, last, key });
         }
 
-        // If the search is a full-page POST the context reloads and init re-runs
-        // with the marker set; if it's AJAX we continue here after the wait.
-        await sleep(1800);
-
-        const dobStr = formatDob(intent.dob);
-        const row = findMatchingPatientRow(intent.lastName, intent.firstName, dobStr);
-        if (row) {
-            const sel = row.querySelector('a[href*="/poe/setpatient/"]');
-            if (sel) {
-                statusNote(`Found ${intent.firstName} ${intent.lastName} — selecting…`);
-                clickEl(sel);
-                return true;
+        // Resume from persisted progress only when the guard (this intent's original
+        // search key) matches; otherwise reset to index 0 and rebuild the list.
+        let idx = 0;
+        try {
+            if ((sessionStorage.getItem(PERM_GUARD_KEY) || '') === guardKey) {
+                const rawList = sessionStorage.getItem(PERM_LIST_KEY);
+                if (rawList) {
+                    const parsed = JSON.parse(rawList);
+                    if (Array.isArray(parsed) && parsed.length) {
+                        perms = parsed;
+                        idx = parseInt(sessionStorage.getItem(PERM_IDX_KEY) || '0', 10) || 0;
+                        if (idx < 0 || idx >= perms.length) idx = 0;
+                    }
+                }
             }
+        } catch(e) { console.warn('[LF-Autofill]', e); }
+        try { sessionStorage.setItem(PERM_LIST_KEY, JSON.stringify(perms)); } catch(e) { console.warn('[LF-Autofill]', e); }
+        try { sessionStorage.setItem(PERM_GUARD_KEY, guardKey); } catch(e) { console.warn('[LF-Autofill]', e); }
+        try { sessionStorage.setItem(PERM_IDX_KEY, String(idx)); } catch(e) { console.warn('[LF-Autofill]', e); }
+
+        while (idx < perms.length) {
+            const perm = perms[idx];
+            let doneKey = '';
+            try { doneKey = sessionStorage.getItem(SEARCHED_KEY) || ''; } catch(e) { console.warn('[LF-Autofill]', e); }
+
+            if (doneKey !== perm.key) {
+                const box = document.querySelector('#txt_search');
+                const btn = document.querySelector('#btn_search_button');
+                if (!box || !btn) return false;
+                const nameRadio = document.querySelector('#rad_search_type-name');
+                if (nameRadio && !nameRadio.checked) nameRadio.checked = true;
+                statusNote(`Searching ${perm.last}, ${perm.first}…`);
+                try { sessionStorage.setItem(SEARCHED_KEY, perm.key); } catch(e) { console.warn('[LF-Autofill]', e); }
+                setInput(box, `${perm.last}, ${perm.first}`);
+                clickEl(btn);
+            }
+
+            // If the search is a full-page POST the context reloads and init re-runs
+            // with the marker set (resuming from this permutation); if it's AJAX we
+            // continue here after the wait.
+            await sleep(1800);
+
+            const row = findMatchingPatientRow(perm.last, perm.first, formatDob(intent.dob));
+            if (row) {
+                const sel = row.querySelector('a[href*="/poe/setpatient/"]');
+                if (sel) {
+                    statusNote(`Found ${perm.first} ${perm.last} — selecting…`);
+                    clickEl(sel);
+                    clearPermState();
+                    clearSearchedKey();
+                    return true;
+                }
+            }
+            idx++;
+            try { sessionStorage.setItem(PERM_IDX_KEY, String(idx)); } catch(e) { console.warn('[LF-Autofill]', e); }
         }
-        try { sessionStorage.removeItem(SEARCHED_KEY); } catch(e) { console.warn('[LF-Autofill]', e); }
+
+        clearPermState();
+        clearSearchedKey();
         statusNote('No matching patient — opening New Patient form…');
         location.href = '/application_main_zfw/poepatient/newpatient';
         return true;

@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Zoho CRM — Subject Template Branching Menu
 // @namespace    jeyson.rx.tools
-// @version      1.1.4
+// @version      1.1.6
 // @author       Jeyson Dagondon
-// @description  Click the glowing "Subject" label to insert order subject lines
+// @description  Click the glowing "Subject" label to insert order/lab subject lines
 // @match        *://crm.zoho.com/*
 // @match        *://*.zoho.com/crm/*
 // @grant        none
@@ -12,7 +12,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[SubjectBranch v1.1.4] boot');
+console.info('[SubjectBranch v1.1.6] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branching Menu', version: '1.1.6', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -176,6 +180,33 @@ console.info('[SubjectBranch v1.1.4] boot');
       },
       "KLOW Blend": {
         "3 Months": "Order 3 months KLOW"
+      }
+    },
+
+    "Labs": {
+      "WL Labs": {
+        "Default": "Check if WL labs are in",
+        "NJ Patient": "Check if WL labs are in - NJ patient",
+        "NY Patient": "Check if WL labs are in - NY patient",
+        "RI Patient": "Check if WL labs are in - RI patient"
+      },
+      "GH Labs": {
+        "Default": "Check if GH labs are in",
+        "NJ Patient": "Check if GH labs are in - NJ patient",
+        "NY Patient": "Check if GH labs are in - NY patient",
+        "RI Patient": "Check if GH labs are in - RI patient"
+      },
+      "BHRT Labs": {
+        "Default": "Check if BHRT labs are in",
+        "NJ Patient": "Check if BHRT labs are in - NJ patient",
+        "NY Patient": "Check if BHRT labs are in - NY patient",
+        "RI Patient": "Check if BHRT labs are in - RI patient"
+      },
+      "Thyroid Labs": {
+        "Default": "Check if Thyroid labs are in",
+        "NJ Patient": "Check if Thyroid labs are in - NJ patient",
+        "NY Patient": "Check if Thyroid labs are in - NY patient",
+        "RI Patient": "Check if Thyroid labs are in - RI patient"
       }
     }
   };

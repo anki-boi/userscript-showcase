@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LifeFile Patient Profile Autofill
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      1.12
 // @description  Fills the LifeFile new-patient form from Copy Everything; glows missing fields
 // @author       Jeyson Dagondon
 // @run-at       document-idle
@@ -14,7 +14,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Profile v1.8] boot');
+console.info('[LF-Profile v1.12] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['LF-Profile'] = { name: 'LifeFile Patient Profile Autofill', version: '1.12', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -54,6 +58,10 @@ console.info('[LF-Profile v1.8] boot');
         d: 'txt_patient_date_of_birth-day',
         y: 'txt_patient_date_of_birth-year'
     };
+
+    // Supervising Practitioner (required select on the new-patient form) — the
+    // clinic always creates patients under Finley. Not part of the patient payload.
+    const SUPERVISING_PRACTITIONER = 'FINLEY LAURA';
 
     // City: filled from payload.city when the extractor found a clean comma-separated
     // city (e.g. "8 Bella Rd, Carmel, NY 10512"). When Zoho's address had NO comma
@@ -192,6 +200,9 @@ function fillForm(payload, btn) {
     }
 
     // --- DOB (three selects) ---
+    // Runs BEFORE the Supervising Practitioner block: LifeFile changed that
+    // field to a hidden input (2026-08-13) which once crashed fillForm here and
+    // skipped the DOB fill. DOB is core patient data — never let it be skipped.
     const dob = payload.dob;
     if (dob && dob.m && dob.d && dob.y) {
         const okM = setSelect(DOB_IDS.m, dob.m);
@@ -205,6 +216,40 @@ function fillForm(payload, btn) {
         glowElement(document.getElementById(DOB_IDS.d));
         glowElement(document.getElementById(DOB_IDS.y));
         glowed += 3;
+    }
+
+    // --- Supervising Practitioner (fixed clinic value) ---
+    // LifeFile changed this field from a real <select> to a hidden input the
+    // server pre-defaults (2026-08-13). Feature-detect: real select → pick
+    // Finley; non-select with a value → trust the server default; non-select
+    // with no value → glow for manual attention. Wrapped in try/catch so this
+    // block can NEVER abort the rest of the fill.
+    try {
+        const supSel = document.getElementById('sel_authorize_provider');
+        if (supSel) {
+            if (supSel.options && supSel.options.length) {
+                const supOpt = Array.from(supSel.options).find((o) =>
+                    (o.textContent || '').trim().toUpperCase().includes(SUPERVISING_PRACTITIONER));
+                if (supOpt) {
+                    if (setSelect('sel_authorize_provider', supOpt.value)) filled++;
+                    else { glowElement(supSel); glowed++; }
+                } else {
+                    glowElement(supSel);
+                    glowed++;
+                }
+            } else if (String(supSel.value || '').trim() !== '') {
+                // Hidden input / custom widget — server pre-defaulted it.
+                console.log('[injector] sel_authorize_provider is not a select; trusting server default:', supSel.value);
+                filled++;
+            } else {
+                glowElement(supSel);
+                glowed++;
+            }
+        }
+    } catch (e) {
+        console.warn('[injector] Supervising Practitioner step failed:', e);
+        const supSel = document.getElementById('sel_authorize_provider');
+        if (supSel) { glowElement(supSel); glowed++; }
     }
 
     flashButton(btn, `✓ Filled ${filled} · ${glowed} to check`, 'var(--ds-success,#0a8754)');
@@ -236,6 +281,10 @@ function fillForm(payload, btn) {
             flashButton(btn, '✕ Bad payload', 'var(--ds-danger,#b3261e)');
             return;
         }
+
+        // RxFlow payloads carry the flat LifeFile block under
+        // _lifeFileProfile (keeps the rich patient payload untouched).
+        if (payload._lifeFileProfile) payload = payload._lifeFileProfile;
 
         fillForm(payload, btn);
     }
@@ -324,7 +373,13 @@ function fillForm(payload, btn) {
             const raw = sessionStorage.getItem('lf_sale_intent');
             intent = raw ? JSON.parse(raw) : null;
         } catch (e) { return; }
-        if (!intent || !intent.firstName || !intent.lastName) return;
+        if (!intent) return;
+        // RxFlow payloads carry the flat block under _lifeFileProfile
+        // (order-flow intents are already flat — this is a no-op for them).
+        // MUST unwrap before the firstName check or rxflow payloads
+        // would early-return (their flat keys are nested).
+        if (intent._lifeFileProfile) intent = intent._lifeFileProfile;
+        if (!intent.firstName || !intent.lastName) return;
         if (!document.querySelector('a.btn_insert_patient')) {
             // New-patient form not rendered yet — retry shortly.
             setTimeout(autoFillFromIntent, 700);

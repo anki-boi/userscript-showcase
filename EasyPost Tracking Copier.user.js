@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EasyPost Tracking Copier
 // @namespace    drjones
-// @version      2.6
+// @version      2.7
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Auto-copy tracking details from EasyPost tracking pages
@@ -11,7 +11,20 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[EasyPost v2.6] boot');
+console.info('[EasyPost v2.7] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['EasyPost'] = {
+  name: 'EasyPost Tracking Copier',
+  version: '2.7',
+  state: 'idle',
+  message: '',
+  output: null,
+  error: null,
+  lastActivity: Date.now(),
+  trigger: null
+};
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -83,4 +96,16 @@ console.info('[EasyPost v2.6] boot');
   }
 
   window.addEventListener('load', () => setTimeout(run, 300));
+
+  // R18: trigger dispatcher
+  const api = window.__scripts['EasyPost'];
+  api.trigger = function (action) {
+    if (action === 'extract') {
+      const text = extract();
+      if (!text) { api.state = 'error'; api.error = 'No tracking data found'; api.lastActivity = Date.now(); return { ok: false, error: api.error }; }
+      api.output = text; api.state = 'done'; api.message = 'Extracted tracking data'; api.lastActivity = Date.now();
+      return { ok: true, output: text };
+    }
+    return { ok: false, error: 'unknown action: ' + action };
+  };
 })();

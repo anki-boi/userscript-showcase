@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sheets TN Clipboard Cleaner
 // @namespace    jeyson.pharmacy.tools
-// @version      1.5
+// @version      1.6
 // @author       Jeyson Dagondon
 // @description  Strips TSV quote-wrapping from copied cells containing TN: for clean pastes
 // @match        https://docs.google.com/spreadsheets/*
@@ -11,7 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[SheetsClean v1.5] boot');
+console.info('[SheetsClean v1.6] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['SheetsClean'] = { name: 'Sheets TN Clipboard Cleaner', version: '1.6', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);

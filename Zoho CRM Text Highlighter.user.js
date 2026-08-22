@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM Text Highlighter
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Highlight specific texts in Zoho CRM (no checkbox)
 // @author       Jeyson Dagondon
 // @match        *://*.crm.zoho.com/*
@@ -11,7 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TextHL v2.2] boot');
+console.info('[TextHL v2.3] boot');
+
+// --- Script API (R18) ---
+window.__scripts = window.__scripts || {};
+window.__scripts['TextHL'] = { name: 'Zoho CRM Text Highlighter', version: '2.3', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 (function() {
     'use strict';

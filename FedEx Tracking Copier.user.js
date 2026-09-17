@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         FedEx Tracking Copier
-// @namespace    drjones
+// @namespace    userscript-showcase
 // @version      2.8
 // @author       Jeyson Dagondon
 // @run-at       document-idle

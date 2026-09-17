@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Zoho CRM Context Extractor
-// @namespace    https://drjonesdc.com/
+// @namespace    https://github.com/anki-boi/userscript-showcase
 // @version      2.9.12
 // @author       Jeyson Dagondon
 // @run-at       document-idle

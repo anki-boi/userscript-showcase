@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         EasyPost Tracking Copier
-// @namespace    drjones
+// @namespace    userscript-showcase
 // @version      2.7
 // @author       Jeyson Dagondon
 // @run-at       document-idle

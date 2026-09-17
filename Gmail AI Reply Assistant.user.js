@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Gmail AI Reply Assistant
-// @namespace    https://drjonesdc.com
+// @namespace    https://github.com/anki-boi/userscript-showcase
 // @version      1.2.1
 // @author       Jeyson Dagondon
 // @run-at       document-idle

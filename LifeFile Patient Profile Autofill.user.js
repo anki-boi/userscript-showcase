@@ -5,10 +5,10 @@
 // @description  Fills the LifeFile new-patient form from Copy Everything; glows missing fields
 // @author       Jeyson Dagondon
 // @run-at       document-idle
-// @match        https://hostB.lifefile.net/*
-// @match        https://hostA.lifefile.net/*
-// @match        https://hostC.lifefile.net:8443/*
-// @match        https://hostD.lifefile.net/*
+// @match        https://hostB.pharmalink.example/*
+// @match        https://hostA.pharmalink.example/*
+// @match        https://hostC.pharmalink.example:8443/*
+// @match        https://hostD.pharmalink.example/*
 // @grant        none
 // ==/UserScript==
 // Part of the userscript-showcase collection — generated from the private working

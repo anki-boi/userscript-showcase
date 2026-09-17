@@ -4,10 +4,10 @@
 // @version      1.25
 // @description  LifeFile pharmacy portal driver for Zoho's Run LifeFile Sale intent (passive)
 // @author       Jeyson Dagondon
-// @match        https://hostB.lifefile.net/*
-// @match        https://hostA.lifefile.net/*
-// @match        https://hostC.lifefile.net:8443/*
-// @match        https://hostD.lifefile.net/*
+// @match        https://hostB.pharmalink.example/*
+// @match        https://hostA.pharmalink.example/*
+// @match        https://hostC.pharmalink.example:8443/*
+// @match        https://hostD.pharmalink.example/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -189,10 +189,10 @@ const CREDS = { /* per-user */ };
     //   hostA = Pharmacy C + Pharmacy D, hostB = Pharmacy A + Pharmacy E,
     //   hostD = Pharmacy F (pharmasolutions) + Pharmacy G (pharmacy).
     const HOST_MAP = {
-        'hostB.lifefile.net': 'hostB',
-        'hostC.lifefile.net': 'progress',
-        'hostA.lifefile.net': 'hostA',
-        'hostD.lifefile.net': 'hostD'
+        'hostB.pharmalink.example': 'hostB',
+        'hostC.pharmalink.example': 'progress',
+        'hostA.pharmalink.example': 'hostA',
+        'hostD.pharmalink.example': 'hostD'
     };
     // Vendor from a login/portal-entry URL's `/vendor_name/<vendor>/` segment.
     function currentVendor() {

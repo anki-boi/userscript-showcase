@@ -3237,9 +3237,9 @@ Total Duration: 4 months
 *we will order another vial in 6 weeks`,
       },
       // ============================================================
-      // APEX (MOTS-c + Tesa) [Labs: IGF/Prolactin]
+      // PHARMACY B (MOTS-c + Tesa) [Labs: IGF/Prolactin]
       // ============================================================
-      "Apex [Labs: IGF/Prolactin] (+C if with GLP)": {
+      "Pharmacy B [Labs: IGF/Prolactin] (+C if with GLP)": {
         "Paid in Full (MOTS-c 2mo + Tesa 3mo)":
 `Products Ordered:
 [date] 8 kits of 10mg CB4211 (Pharmacy C) [initials]

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Patient Timezone — Zoho + GHL (temp)
-// @namespace    drjones.tools
+// @namespace    showcase.tools
 // @version      2.1.6
 // @author       Jeyson Dagondon
 // @description  Patient timezone panel for Zoho + GHL: Denver offset, local time, copy/paste TZ

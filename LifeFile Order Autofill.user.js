@@ -4,10 +4,10 @@
 // @version      1.18
 // @author       Jeyson Dagondon
 // @description  One-click LifeFile order autofill: step-1 auto-submit, patient search-or-create
-// @match        https://hostB.lifefile.net/*
-// @match        https://hostA.lifefile.net/*
-// @match        https://hostC.lifefile.net:8443/*
-// @match        https://hostD.lifefile.net/*
+// @match        https://hostB.pharmalink.example/*
+// @match        https://hostA.pharmalink.example/*
+// @match        https://hostC.pharmalink.example:8443/*
+// @match        https://hostD.pharmalink.example/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -173,7 +173,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
     // ========================================
     const PHARMACY_ID_MAP = {
         '1221275': 'Pharmacy A',
-        '978415':  'Apex/Pharmacy B',
+        '978415':  'Pharmacy B',
         '1018094': 'Pharmacy C',
         '1056130': 'Pharmacy D',
     };
@@ -184,24 +184,24 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
     // Source: clinic pharmacy shipping matrix (synced from Zoho extractor v1.8).
     // ========================================
     const RESTRICTION_MAP = {
-        AL: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C'],
-        AK: ['Pharmacy D', 'Apex/Pharmacy B'],
-        AR: ['Apex/Pharmacy B'],
-        CA: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C'],
+        AL: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
+        AK: ['Pharmacy D', 'Pharmacy B'],
+        AR: ['Pharmacy B'],
+        CA: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
         CT: ['Pharmacy D'],
         DC: ['Pharmacy C'],
-        HI: ['Apex/Pharmacy B'],
-        IA: ['Apex/Pharmacy B'],
-        LA: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C'],
+        HI: ['Pharmacy B'],
+        IA: ['Pharmacy B'],
+        LA: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
         MI: ['Pharmacy D', 'Pharmacy C'],
-        MS: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C'],
+        MS: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
         MT: ['Pharmacy D', 'Pharmacy C'],
-        NC: ['Apex/Pharmacy B'],
+        NC: ['Pharmacy B'],
         ND: ['Pharmacy A'],
         NV: ['Pharmacy D'],
-        OH: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C'],
-        OR: ['Apex/Pharmacy B'],
-        SC: ['Pharmacy D', 'Apex/Pharmacy B'],
+        OH: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
+        OR: ['Pharmacy B'],
+        SC: ['Pharmacy D', 'Pharmacy B'],
         TX: ['Pharmacy D', 'Pharmacy C'],
         WA: ['Pharmacy D', 'Pharmacy C'],
         WV: ['Pharmacy D', 'Pharmacy C'],

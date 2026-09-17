@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Zoho CRM — Peptide SMS Templates
-// @namespace    drjonesdc
+// @namespace    userscript-showcase
 // @version      5.11.9
 // @author       Jeyson Dagondon
 // @run-at       document-idle

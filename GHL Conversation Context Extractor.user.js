@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GHL Conversation Context Extractor
-// @namespace    https://drjonesdc.com/
+// @namespace    https://github.com/anki-boi/userscript-showcase
 // @version      1.8.16
 // @author       Jeyson Dagondon
 // @run-at       document-idle

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         UPS Tracking Copier
-// @namespace    drjones
+// @namespace    userscript-showcase
 // @version      2.9
 // @author       Jeyson Dagondon
 // @run-at       document-idle

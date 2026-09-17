@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         RingCentral AI Reply Assistant
-// @namespace    https://drjonesdc.com
+// @namespace    https://github.com/anki-boi/userscript-showcase
 // @version      4.4.3
 // @author       Jeyson Dagondon
 // @run-at       document-idle

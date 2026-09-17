@@ -80,31 +80,31 @@ window.__scripts['CC'] = {
     // A "(...)" note marks a PARTIAL/conditional restriction (rendered amber).
     // ========================================
     const RESTRICTION_MAP = {
-        AL: ['Pharmacy D', 'Formulation', 'Apex/Pharmacy B', 'Pharmacy C', 'Pharmacy H', 'Pharmacy E'],
-        AK: ['Pharmacy D', 'Pharmacy I', 'Apex/Pharmacy B', 'Pharmacy H'],
-        AR: ['Formulation', 'Pharmacy I', 'Apex/Pharmacy B', 'Pharmacy E'],
-        CA: ['Pharmacy D', 'Formulation', 'Pharmacy I', 'Apex/Pharmacy B', 'Pharmacy C', 'Pharmacy H', 'Pharmacy E'],
+        AL: ['Pharmacy D', 'Formulation', 'Pharmacy B', 'Pharmacy C', 'Pharmacy H', 'Pharmacy E'],
+        AK: ['Pharmacy D', 'Pharmacy I', 'Pharmacy B', 'Pharmacy H'],
+        AR: ['Formulation', 'Pharmacy I', 'Pharmacy B', 'Pharmacy E'],
+        CA: ['Pharmacy D', 'Formulation', 'Pharmacy I', 'Pharmacy B', 'Pharmacy C', 'Pharmacy H', 'Pharmacy E'],
         CT: ['Pharmacy D', 'Pharmacy H'],
         DC: ['Pharmacy C'],
-        HI: ['Pharmacy I', 'Apex/Pharmacy B'],
+        HI: ['Pharmacy I', 'Pharmacy B'],
         IN: ['Pharmacy D'],
-        IA: ['Apex/Pharmacy B'],
+        IA: ['Pharmacy B'],
         KY: ['Formulation'],
-        LA: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C', 'Pharmacy E'],
+        LA: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C', 'Pharmacy E'],
         ME: ['Pharmacy I'],
         MA: ['Pharmacy H', 'Pharmacy E', 'Pharmacy C (MOTS-c specific)'],
         MI: ['Pharmacy D', 'Formulation', 'Pharmacy C'],
-        MS: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C', 'Pharmacy E'],
+        MS: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C', 'Pharmacy E'],
         MT: ['Pharmacy D', 'Pharmacy C'],
-        NE: ['Formulation', 'Apex/Pharmacy B'],
+        NE: ['Formulation', 'Pharmacy B'],
         NV: ['Pharmacy D', 'Formulation', 'Pharmacy E'],
         NH: ['Pharmacy H'],
-        NC: ['Apex/Pharmacy B', 'Pharmacy H'],
+        NC: ['Pharmacy B', 'Pharmacy H'],
         ND: ['Pharmacy A'],
-        OH: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy C'],
+        OH: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
         OR: ['Formulation', 'Pharmacy E', 'Progress (for Thymosin Alpha-1)'],
         RI: ['Pharmacy H'],
-        SC: ['Pharmacy D', 'Apex/Pharmacy B', 'Pharmacy E'],
+        SC: ['Pharmacy D', 'Pharmacy B', 'Pharmacy E'],
         TX: ['Pharmacy D', 'Pharmacy I', 'Pharmacy C', 'Pharmacy H (no injections)'],
         VT: ['Pharmacy H'],
         VA: ['Formulation', 'Pharmacy E'],
@@ -119,13 +119,13 @@ window.__scripts['CC'] = {
     // the sale from the login page onward.
     // ========================================
     const PHARMACY_URL_MAP = [
-        { key: 'pharmacya',    name: 'Pharmacy A',              host: 'hostB',      url: 'https://hostB.lifefile.net/application_main_zfw/login/login/vendor_name/vendorA/frm/stdlogin/access/doctor' },
-        { key: 'progress',   name: 'Progress (Apex/Pharmacy B)', host: 'hostC:8443', url: 'https://hostC.lifefile.net:8443/application_main_zfw/login/login/vendor_name/vendorB/frm/stdlogin/access/doctor' },
-        { key: 'pharmacyc',  name: 'Pharmacy C',           host: 'hostA',      url: 'https://hostA.lifefile.net/application_main_zfw/login/login/vendor_name/vendorC/access/doctor' },
-        { key: 'pharmacyd',  name: 'Pharmacy D',            host: 'hostA',      url: 'https://hostA.lifefile.net/application_main_zfw/login/login/vendor_name/pharmacyd/frm/stdlogin/access/doctor' },
-        { key: 'pharmacye', name: 'Pharmacy E',        host: 'hostB',      url: 'https://hostB.lifefile.net/application_main_zfw/login/login/access/doctor/vendor_name/vendorE/logout/1' },
-        { key: 'pharmacyf',   name: 'Pharmacy F',            host: 'hostD',      url: 'https://hostD.lifefile.net/application_main_zfw/login/login/vendor_name/vendorF/access/doctor' },
-        { key: 'pharmacyg',   name: 'Pharmacy G (LDN)',      host: 'hostD',      url: 'https://hostD.lifefile.net/application_main_zfw/login/login/vendor_name/vendorG/access/doctor' }
+        { key: 'pharmacya',    name: 'Pharmacy A',              host: 'hostB',      url: 'https://hostB.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorA/frm/stdlogin/access/doctor' },
+        { key: 'progress',   name: 'Pharmacy B', host: 'hostC:8443', url: 'https://hostC.pharmalink.example:8443/application_main_zfw/login/login/vendor_name/vendorB/frm/stdlogin/access/doctor' },
+        { key: 'pharmacyc',  name: 'Pharmacy C',           host: 'hostA',      url: 'https://hostA.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorC/access/doctor' },
+        { key: 'pharmacyd',  name: 'Pharmacy D',            host: 'hostA',      url: 'https://hostA.pharmalink.example/application_main_zfw/login/login/vendor_name/pharmacyd/frm/stdlogin/access/doctor' },
+        { key: 'pharmacye', name: 'Pharmacy E',        host: 'hostB',      url: 'https://hostB.pharmalink.example/application_main_zfw/login/login/access/doctor/vendor_name/vendorE/logout/1' },
+        { key: 'pharmacyf',   name: 'Pharmacy F',            host: 'hostD',      url: 'https://hostD.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorF/access/doctor' },
+        { key: 'pharmacyg',   name: 'Pharmacy G (LDN)',      host: 'hostD',      url: 'https://hostD.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorG/access/doctor' }
     ];
 
     // A WindowProxy to the single LifeFile tab we drive. Survives Zoho SPA
@@ -135,7 +135,7 @@ window.__scripts['CC'] = {
     // 'reused' | 'opened' | 'failed' so the UI can show what actually happened.
     // Cross-origin navigation via the WindowProxy is allowed, so this reuses the
     // tab for ANY pharmacy — unlike Chrome's named-window lookup, which is
-    // origin-scoped and can't see *.lifefile.net tabs from crm.zoho.com.
+    // origin-scoped and can't see *.pharmalink.example tabs from crm.zoho.com.
     function openPortalTab(url) {
         if (portalWin && !portalWin.closed) {
             try { portalWin.location.href = url; portalWin.focus(); return 'reused'; } catch(e) { console.warn('[CC]', e); }
@@ -151,7 +151,7 @@ window.__scripts['CC'] = {
     const normPharm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
     // Is a pharmacy blocked from shipping to a state (per RESTRICTION_MAP)?
-    // Substring match so 'Progress (Apex/Pharmacy B)' hits 'Apex/Pharmacy B' etc.
+    // Substring match so 'Pharmacy B' hits 'Pharmacy B' etc.
     function isPharmacyRestricted(pharmName, stateAbbr) {
         if (!stateAbbr) return false;
         const restricted = RESTRICTION_MAP[stateAbbr];

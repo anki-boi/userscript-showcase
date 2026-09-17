@@ -46,7 +46,7 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
   /* ============================================================
      CONFIG
      ============================================================ */
-  const ZOHO_ORG = 'org695301973';
+  const ZOHO_ORG = 'org000000000';
   const GHL_LOCATION = 'EGjxftUoKevhGYtuS10X';
   const BAR_ID = 'xplat-toolkit-bar';
   const IDBAR_CLASS = 'xplat-idcopy-bar';
@@ -891,13 +891,13 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
      Session Handler + Order Status Extractor auto-search the patient)
      ============================================================ */
   const LF_PHARMACY_URL_MAP = [
-    { key: 'pharmacya',   name: 'Pharmacy A',              host: 'hostB',      url: 'https://hostB.lifefile.net/application_main_zfw/login/login/vendor_name/vendorA/frm/stdlogin/access/doctor' },
-    { key: 'progress',  name: 'Progress (Apex/Pharmacy B)', host: 'hostC:8443', url: 'https://hostC.lifefile.net:8443/application_main_zfw/login/login/vendor_name/vendorB/frm/stdlogin/access/doctor' },
-    { key: 'pharmacyc', name: 'Pharmacy C',           host: 'hostA',      url: 'https://hostA.lifefile.net/application_main_zfw/login/login/vendor_name/vendorC/access/doctor' },
-    { key: 'pharmacyd', name: 'Pharmacy D',            host: 'hostA',      url: 'https://hostA.lifefile.net/application_main_zfw/login/login/vendor_name/pharmacyd/frm/stdlogin/access/doctor' },
-    { key: 'pharmacye', name: 'Pharmacy E',       host: 'hostB',      url: 'https://hostB.lifefile.net/application_main_zfw/login/login/access/doctor/vendor_name/vendorE/logout/1' },
-    { key: 'pharmacyf',  name: 'Pharmacy F',            host: 'hostD',      url: 'https://hostD.lifefile.net/application_main_zfw/login/login/vendor_name/vendorF/access/doctor' },
-    { key: 'pharmacyg',  name: 'Pharmacy G (LDN)',      host: 'hostD',      url: 'https://hostD.lifefile.net/application_main_zfw/login/login/vendor_name/vendorG/access/doctor' }
+    { key: 'pharmacya',   name: 'Pharmacy A',              host: 'hostB',      url: 'https://hostB.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorA/frm/stdlogin/access/doctor' },
+    { key: 'progress',  name: 'Pharmacy B', host: 'hostC:8443', url: 'https://hostC.pharmalink.example:8443/application_main_zfw/login/login/vendor_name/vendorB/frm/stdlogin/access/doctor' },
+    { key: 'pharmacyc', name: 'Pharmacy C',           host: 'hostA',      url: 'https://hostA.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorC/access/doctor' },
+    { key: 'pharmacyd', name: 'Pharmacy D',            host: 'hostA',      url: 'https://hostA.pharmalink.example/application_main_zfw/login/login/vendor_name/pharmacyd/frm/stdlogin/access/doctor' },
+    { key: 'pharmacye', name: 'Pharmacy E',       host: 'hostB',      url: 'https://hostB.pharmalink.example/application_main_zfw/login/login/access/doctor/vendor_name/vendorE/logout/1' },
+    { key: 'pharmacyf',  name: 'Pharmacy F',            host: 'hostD',      url: 'https://hostD.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorF/access/doctor' },
+    { key: 'pharmacyg',  name: 'Pharmacy G (LDN)',      host: 'hostD',      url: 'https://hostD.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorG/access/doctor' }
   ];
 
   function escapeHtml(s) {

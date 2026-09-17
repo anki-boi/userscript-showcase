@@ -5,7 +5,7 @@
 // @description  Auto-calculates GLP-1 order block dosing (total-dose and duration modes)
 // @author       Jeyson Dagondon
 // @grant        none
-// @match        https://crm.zoho.com/crm/org695301973/*
+// @match        https://crm.zoho.com/crm/org000000000/*
 // @run-at       document-idle
 // ==/UserScript==
 // Part of the userscript-showcase collection — generated from the private working

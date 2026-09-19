@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Template Menu
 // @namespace    http://tampermonkey.net/
-// @version      6.16
+// @version      6.23
 // @description  Cascading template quick-insert menu: live preview, search, recent tracking
 // @author       Jeyson Dagondon
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
@@ -19,11 +19,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TMenu v6.16] boot');
+console.info('[TMenu v6.23] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['TMenu'] = { name: 'Template Menu', version: '6.16', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['TMenu'] = { name: 'Template Menu', version: '6.23', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
 // The Claude prompt used to audit/rebalance peptide stack order templates is
 // maintained outside this repo (not part of this script).
@@ -247,10 +247,10 @@ Medication: 1 bottle GHK-Cu/Argireline/Leuphasyl 0.2%/0.5%/3% cream 30gm
 Dosing: 1 pea-sized amount for face, 1 pea-sized amount for neck (not for full body use)
 Frequency: Morning and/or evening, daily
 Estimated Duration: 4 weeks`,
-        "3 Months / 3 bottles (90gm)":
+        "3 Months / 3 bottles (30gm each)":
 `Products Ordered:
 [date] (Pharmacy J) [initials]
-Medication: 3 bottles GHK-Cu/Argireline/Leuphasyl 0.2%/0.5%/3% cream 90gm
+Medication: 3 bottles GHK-Cu/Argireline/Leuphasyl 0.2%/0.5%/3% cream 30gm each
 Dosing: 1 pea-sized amount for face, 1 pea-sized amount for neck (not for full body use)
 Frequency: Morning and/or evening, daily
 Estimated Duration: 12 weeks`,
@@ -998,13 +998,13 @@ Estimated Duration: 4 months`,
       },
     },
 // ================================================================
-    // Progress
+    // Pharmacy B
     // ================================================================
-    "Progress": {
+    "Pharmacy B": {
       "Tesa +L (+C if with GLP)[GO TO PHARMACY A!]": {
         "1 Vial / 3mL":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 vial of 3mL Tesa 8mg/mL
 Dosing: Inject SubQ at bedtime (12 units)
@@ -1016,7 +1016,7 @@ Estimated Duration: 4 Weeks
       "Pregnyl HCG Injectable +L +C": {
         "1 Vial / 10mL":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 vial of 10mL Pregnyl HCG 10,000 Units
 Dosing:
@@ -1025,10 +1025,36 @@ Dosing:
 Frequency: 2x/week
 Estimated Duration: `,
       },
+      "CJC-1295/Ipamorelin Troche 2mg/2mg": {
+        "1 Month / 30 troches":
+`Products Ordered:
+[date] (Pharmacy B) [initials]
+Order #
+Medication: 30 CJC-1295/Ipamorelin Troches 2mg/2mg
+Dosing: Dissolve 1 troche under the tongue
+Frequency: Daily
+Estimated Duration: 4 weeks`,
+        "2 Months / 60 troches":
+`Products Ordered:
+[date] (Pharmacy B) [initials]
+Order #
+Medication: 60 CJC-1295/Ipamorelin Troches 2mg/2mg
+Dosing: Dissolve 1 troche under the tongue
+Frequency: Daily
+Estimated Duration: 8 weeks`,
+        "3 Months / 90 troches":
+`Products Ordered:
+[date] (Pharmacy B) [initials]
+Order #
+Medication: 90 CJC-1295/Ipamorelin Troches 2mg/2mg
+Dosing: Dissolve 1 troche under the tongue
+Frequency: Daily
+Estimated Duration: 12 weeks`,
+      },
       "Methylene Blue Pill 10mg": {
         "1 Month / 30 pills":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 30 Methylene Blue 10mg
 Dosing: 1 pill
@@ -1036,7 +1062,7 @@ Frequency: Daily
 Estimated Duration: 4 weeks`,
         "3 Months / 90 pills":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 90 Methylene Blue 10mg
 Dosing: 1 pill
@@ -1046,7 +1072,7 @@ Estimated Duration: 12 weeks`,
       "Methylene Blue Pill 15mg": {
         "1 Month / 30 pills":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 30 Methylene Blue 15mg
 Dosing: 1 pill
@@ -1054,7 +1080,7 @@ Frequency: Daily
 Estimated Duration: 4 weeks`,
         "3 Months / 90 pills":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 90 Methylene Blue 15mg
 Dosing: 1 pill
@@ -1064,7 +1090,7 @@ Estimated Duration: 12 weeks`,
       "Methylene Blue Pill 25mg": {
         "1 Month / 30 pills":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 30 Methylene Blue 25mg
 Dosing: 1 pill
@@ -1072,7 +1098,7 @@ Frequency: Daily
 Estimated Duration: 4 weeks`,
         "3 Months / 90 pills":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 90 Methylene Blue 25mg
 Dosing: 1 pill
@@ -1082,7 +1108,7 @@ Estimated Duration: 12 weeks`,
       "NAD Nasal Spray": {
         "1 Bottle / 15mL":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 bottle of 15mL NAD Nasal Spray 30mg/mL
 Dosing: 1 spray per nostril
@@ -1092,7 +1118,7 @@ Estimated Duration: 22-45 days`,
       "Nicotine Troches": {
         "1 Month / 30 troches":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 30 Nicotine Troches 1mg
 Dosing: 1 troche
@@ -1102,7 +1128,7 @@ Estimated Duration: 4 weeks`,
       "NMN/Apigenin Capsule": {
         "1 Month / 30 capsules":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 30 NMN/Apigenin 250mg/150mg
 Dosing: 1 capsule without food
@@ -1110,7 +1136,7 @@ Frequency: Daily
 Estimated Duration: 4 weeks`,
         "3 Months / 90 capsules":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 90 NMN/Apigenin 250mg/150mg
 Dosing: 1 capsule without food
@@ -1120,7 +1146,7 @@ Estimated Duration: 12 weeks`,
       "PT-141 Injection": {
         "1 Vial / 2mL":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 vial of 2mL PT-141 10mg/mL
 Dosing: Inject SQ (5-15 units) 45–60 min before sexual activity
@@ -1130,7 +1156,7 @@ Estimated Duration: 28 days`,
       "PT-141 Nasal Spray": {
         "1 Bottle / 3mL":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 bottle of 3mL PT-141 Nasal 2.5mg/0.1mL
 Dosing: 1-3 sprays intranasally 45–60 min before sexual activity
@@ -1140,7 +1166,7 @@ Estimated Duration: 4 weeks`,
       "SS-31 Injection": {
         "7 Weeks / 1 vial":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 vial of 6mL SS-31 50mg/mL
 Dosing: 20mg (40 units)
@@ -1150,7 +1176,7 @@ Estimated Duration: 7 weeks`,
       "Thymosin Alpha-1 Injection": {
         "1 Month / 1 vial":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 vial of 5mL Thymosin Alpha-1 3mg/mL
 Dosing: 0.45mg (15 units)
@@ -1158,7 +1184,7 @@ Frequency: Daily
 Estimated Duration: 4 weeks`,
         "3 Months / 3 vials":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 3 vials of 5mL Thymosin Alpha-1 3mg/mL
 Dosing: 0.45mg (15 units)
@@ -1168,7 +1194,7 @@ Estimated Duration: 12 weeks`,
       "Thymosin Alpha-1 Nasal Spray": {
         "1 Month / 1 vial":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 1 vial of 6mL Thymosin Alpha-1 3mg/mL Nasal
 Dosing: 1 spray per nostril
@@ -1176,7 +1202,7 @@ Frequency: Daily up to 2x/day
 Estimated Duration: 4 weeks`,
         "3 Months / 3 vials":
 `Products Ordered:
-[date] (Progress) [initials]
+[date] (Pharmacy B) [initials]
 Order #
 Medication: 3 vials of 6mL Thymosin Alpha-1 3mg/mL Nasal
 Dosing: 1 spray per nostril
@@ -1368,45 +1394,45 @@ Frequency:`,
 [date] (Greenwich) [initials]
 Medication: 1x30 caps 5-Amino 1MQ Capsules
 Concentration: 50 mg per capsule
-Dosing:
-Frequency:`,
+Dosing: 1 capsule by mouth
+Frequency: Once daily`,
           "2 Months":
 `Products Ordered:
 [date] (Greenwich) [initials]
 Medication: 2x30 caps 5-Amino 1MQ Capsules
 Concentration: 50 mg per capsule
-Dosing:
-Frequency:`,
+Dosing: 1 capsule by mouth
+Frequency: Once daily`,
           "3 Months":
 `Products Ordered:
 [date] (Greenwich) [initials]
 Medication: 3x30 caps 5-Amino 1MQ Capsules
 Concentration: 50 mg per capsule
-Dosing:
-Frequency:`,
+Dosing: 1 capsule by mouth
+Frequency: Once daily`,
         },
         "[GRE] MOTS-C injectable": {
           "1 Month":
 `Products Ordered:
 [date] (Greenwich) [initials]
-Medication: 1x5mL MOTS-C
+Medication: 3x5mL MOTS-C
 Concentration: 2 mg/mL
-Dosing: 20 units (0.2 mL = 0.4 mg) subcutaneously
-Frequency: Mornings, Monday through Friday`,
+Dosing: 75 units (1.5 mg) subcutaneously
+Frequency: Mornings, 5 days on, 2 days off`,
           "2 Months":
 `Products Ordered:
 [date] (Greenwich) [initials]
-Medication: 2x5mL MOTS-C
+Medication: 6x5mL MOTS-C
 Concentration: 2 mg/mL
-Dosing: 20 units (0.2 mL = 0.4 mg) subcutaneously
-Frequency: Mornings, Monday through Friday`,
+Dosing: 75 units (1.5 mg) subcutaneously
+Frequency: Mornings, 5 days on, 2 days off`,
           "3 Months":
 `Products Ordered:
 [date] (Greenwich) [initials]
-Medication: 3x5mL MOTS-C
+Medication: 9x5mL MOTS-C
 Concentration: 2 mg/mL
-Dosing: 20 units (0.2 mL = 0.4 mg) subcutaneously
-Frequency: Mornings, Monday through Friday`,
+Dosing: 75 units (1.5 mg) subcutaneously
+Frequency: Mornings, 5 days on, 2 days off`,
         },
         "[GRE] MOTs-C/Tesa injectable": {
           "1 Month":
@@ -1695,6 +1721,14 @@ Dosing: 20 units (0.2 mL = 0.4 mg) subcutaneously
 Frequency: Once daily, Monday through Friday`,
         },
         "[GRE] Kisspeptin injectable": {
+          "1 Month":
+`Products Ordered:
+[date] (Greenwich) [initials]
+Medication: 1x5mL Kisspeptin
+Concentration: 1 mg/mL
+Dosing: 10 units (0.1 mL = 0.1 mg) subcutaneously
+Frequency: Two times per week
+Estimated Duration: 1 month`,
           "2 Months":
 `Products Ordered:
 [date] (Greenwich) [initials]
@@ -1827,26 +1861,49 @@ Frequency: Every night at bedtime, Monday through Friday`,
 `Products Ordered:
 [date] (Greenwich) [initials]
 Medication: 1x5mL Thymosin A-1
-Concentration: 1 mg/mL
-Dosing: 20 units (0.2 mL = 0.2 mg) subcutaneously
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) subcutaneously
 Frequency: Every day, Monday through Friday`,
           "2 Months":
 `Products Ordered:
 [date] (Greenwich) [initials]
 Medication: 2x5mL Thymosin A-1
-Concentration: 1 mg/mL
-Dosing: 20 units (0.2 mL = 0.2 mg) subcutaneously
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) subcutaneously
 Frequency: Every day, Monday through Friday`,
           "3 Months":
 `Products Ordered:
 [date] (Greenwich) [initials]
 Medication: 3x5mL Thymosin A-1
-Concentration: 1 mg/mL
-Dosing: 20 units (0.2 mL = 0.2 mg) subcutaneously
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) subcutaneously
 Frequency: Every day, Monday through Friday`,
         },
         // ---------------- Mitochondria / Energy ----------------
-        "[GRE] NAD+ injectable": {
+        "[GRE] NAD+ injectable (50 units)": {
+          "1 Month":
+`Products Ordered:
+[date] (Greenwich) [initials]
+Medication: 1x10mL NAD+
+Concentration: 100 mg/mL
+Dosing: 50 units (0.5 mL = 50 mg) subcutaneously
+Frequency: Once daily, Monday through Friday`,
+          "2 Months":
+`Products Ordered:
+[date] (Greenwich) [initials]
+Medication: 2x10mL NAD+
+Concentration: 100 mg/mL
+Dosing: 50 units (0.5 mL = 50 mg) subcutaneously
+Frequency: Once daily, Monday through Friday`,
+          "3 Months":
+`Products Ordered:
+[date] (Greenwich) [initials]
+Medication: 3x10mL NAD+
+Concentration: 100 mg/mL
+Dosing: 50 units (0.5 mL = 50 mg) subcutaneously
+Frequency: Once daily, Monday through Friday`,
+        },
+        "[GRE] NAD+ injectable (20 units)": {
           "1 Month":
 `Products Ordered:
 [date] (Greenwich) [initials]
@@ -2121,6 +2178,227 @@ Concentration: 12 mg
 Dosing:
 Frequency:`,
         },
+      },
+    },
+    // ================================================================
+    // PHARMACYL  (portal.pharmacyl.example — peptide catalog)
+    //   Source of truth: Pharmacy L peptide sheet (2026-09). Pharmacy L is its
+    //   OWN branch; the Greenwich copies of the same peptides stay under
+    //   RxFlow on purpose — duplicate entries across pharmacies are
+    //   intentional (per Jeyson 2026-09-11: pick the fulfilling pharmacy).
+    //   v6.21 adds the rest of the sheet: TB-500, GHK-Cu, MOTS-C, NAD+
+    //   injectable and NAD Nasal Spray (BPC-157 + Tesamorelin were v6.20).
+    //   Tier labels mirror the sheet's Duration column = how long ONE vial
+    //   lasts at the listed dose, so the vial count is the tier multiple.
+    //   NAD+ injectable: the sheet's "40 units (80 mg)" is a units typo —
+    //   100 mg/mL means 80 mg = 80 units, which is also what makes the
+    //   10 mL / 1000 mg vial last the sheet's 1 month (80 mg x 3 x ~4.3).
+    //   v6.22 adds the Estimated Duration line every other pharmacy's
+    //   peptides already carry (Pharmacy A/Pharmacy J style, in weeks) to all 18
+    //   Pharmacy L tiers. Value = the tier label = total supply across the
+    //   vials, and the arithmetic checks out (GHK-Cu 3 mo = 12 units x
+    //   2.5 mg x 12 weeks = one 150 mg vial; MOTS-C 2.5 mo = 10 weeks of
+    //   5 mg twice weekly = one 100 mg vial).
+    //   v6.23 (a) DROPS the pointless "Peptide" sub-branch: Pharmacy L only
+    //   ever had that one subsection, so it was a pure extra click. Every
+    //   Pharmacy L paste now sits directly under Pharmacy L.
+    //   (b) MOTS-C carries BOTH Pharmacy L concentrations, so each entry names
+    //   its own: (20 mg/mL) [5 mL = 100 mg, 25 units = 5 mg] and the new
+    //   (10 mg/mL) [5 mL = 50 mg, 50 units = 5 mg, so 2 vials = 10 weeks /
+    //   2.5 months and 4 vials = 20 weeks / 5 months].
+    // ================================================================
+    "Pharmacy L": {
+
+      // ---------------- Healing ----------------
+      "[BLRX] BPC-157 injectable": {
+        "1 Month":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 1x5mL BPC-157
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) intramuscularly at the injury site
+Frequency: Once daily
+Estimated Duration: 4 weeks`,
+        "2 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x5mL BPC-157
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) intramuscularly at the injury site
+Frequency: Once daily
+Estimated Duration: 8 weeks`,
+        "3 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 3x5mL BPC-157
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) intramuscularly at the injury site
+Frequency: Once daily
+Estimated Duration: 12 weeks`,
+      },
+      "[BLRX] TB-500 injectable": {
+        "7 Weeks":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 1x5mL TB-500
+Concentration: 10 mg/mL
+Dosing: 10 units (0.1 mL = 1 mg) subcutaneously
+Frequency: Once daily
+Estimated Duration: 7 weeks`,
+        "14 Weeks":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x5mL TB-500
+Concentration: 10 mg/mL
+Dosing: 10 units (0.1 mL = 1 mg) subcutaneously
+Frequency: Once daily
+Estimated Duration: 14 weeks`,
+      },
+
+      // ---------------- Skin ----------------
+      "[BLRX] GHK-Cu injectable": {
+        "3 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 1x3mL GHK-Cu
+Concentration: 50 mg/mL
+Dosing: 5 units (0.05 mL = 2.5 mg) subcutaneously
+Frequency: Once daily, Monday through Friday
+Estimated Duration: 12 weeks`,
+        "6 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x3mL GHK-Cu
+Concentration: 50 mg/mL
+Dosing: 5 units (0.05 mL = 2.5 mg) subcutaneously
+Frequency: Once daily, Monday through Friday
+Estimated Duration: 24 weeks`,
+        "9 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 3x3mL GHK-Cu
+Concentration: 50 mg/mL
+Dosing: 5 units (0.05 mL = 2.5 mg) subcutaneously
+Frequency: Once daily, Monday through Friday
+Estimated Duration: 36 weeks`,
+      },
+
+      // ---------------- Mitochondria / Metabolic ----------------
+      "[BLRX] MOTS-C injectable (20 mg/mL)": {
+        "2.5 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 1x5mL MOTS-C
+Concentration: 20 mg/mL
+Dosing: 25 units (0.25 mL = 5 mg) subcutaneously
+Frequency: Twice weekly, in the morning or before your workout
+Estimated Duration: 10 weeks`,
+        "5 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x5mL MOTS-C
+Concentration: 20 mg/mL
+Dosing: 25 units (0.25 mL = 5 mg) subcutaneously
+Frequency: Twice weekly, in the morning or before your workout
+Estimated Duration: 20 weeks`,
+      },
+      // Same peptide, Pharmacy L's OTHER concentration: a 5 mL vial at 10 mg/mL
+      // holds 50 mg, so 5 mg twice weekly (10 mg/week) = 5 weeks per vial and
+      // the sheet's own durations need DOUBLE the vials: 2 vials = 2.5 months
+      // (10 weeks), 4 vials = 5 months (20 weeks). The dose is the same 5 mg,
+      // which is 50 units (0.5 mL) here instead of the 20 mg/mL entry's 25
+      // units (0.25 mL). Jeyson 2026-09-16.
+      "[BLRX] MOTS-C injectable (10 mg/mL)": {
+        "2.5 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x5mL MOTS-C
+Concentration: 10 mg/mL
+Dosing: 50 units (0.5 mL = 5 mg) subcutaneously
+Frequency: Twice weekly, in the morning or before your workout
+Estimated Duration: 10 weeks`,
+        "5 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 4x5mL MOTS-C
+Concentration: 10 mg/mL
+Dosing: 50 units (0.5 mL = 5 mg) subcutaneously
+Frequency: Twice weekly, in the morning or before your workout
+Estimated Duration: 20 weeks`,
+      },
+      "[BLRX] NAD+ injectable": {
+        "1 Month":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 1x10mL NAD+
+Concentration: 100 mg/mL
+Dosing: 80 units (0.8 mL = 80 mg) subcutaneously
+Frequency: Three times a week
+Estimated Duration: 4 weeks`,
+        "2 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x10mL NAD+
+Concentration: 100 mg/mL
+Dosing: 80 units (0.8 mL = 80 mg) subcutaneously
+Frequency: Three times a week
+Estimated Duration: 8 weeks`,
+        "3 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 3x10mL NAD+
+Concentration: 100 mg/mL
+Dosing: 80 units (0.8 mL = 80 mg) subcutaneously
+Frequency: Three times a week
+Estimated Duration: 12 weeks`,
+      },
+
+      // ---------------- Cognitive ----------------
+      "[BLRX] NAD Nasal Spray": {
+        "2 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 1x10mL NAD Nasal Spray
+Concentration: 300 mg/mL
+Dosing: 1 spray in each nostril every morning
+Frequency: Daily, up to 2 times per day as directed
+Estimated Duration: 8 weeks`,
+        "4 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x10mL NAD Nasal Spray
+Concentration: 300 mg/mL
+Dosing: 1 spray in each nostril every morning
+Frequency: Daily, up to 2 times per day as directed
+Estimated Duration: 16 weeks`,
+      },
+
+      // ---------------- Fat Loss / Growth Hormone ----------------
+      "[BLRX] Tesamorelin injectable": {
+        "1 Month":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 1x5mL Tesamorelin
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) subcutaneously
+Frequency: Every night at bedtime, Monday through Friday
+Estimated Duration: 4 weeks`,
+        "2 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 2x5mL Tesamorelin
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) subcutaneously
+Frequency: Every night at bedtime, Monday through Friday
+Estimated Duration: 8 weeks`,
+        "3 Months":
+`Products Ordered:
+[date] (Pharmacy L) [initials]
+Medication: 3x5mL Tesamorelin
+Concentration: 5 mg/mL
+Dosing: 20 units (0.2 mL = 1 mg) subcutaneously
+Frequency: Every night at bedtime, Monday through Friday
+Estimated Duration: 12 weeks`,
       },
     },
   "Stacks": {
@@ -3083,7 +3361,7 @@ Total Duration: 3 months
 Dosing: Per medical direction
 Total Duration: 3 months
 
-[date] 3 vials of 5mL Thymosin Alpha-1 3mg/mL (Progress) [initials]
+[date] 3 vials of 5mL Thymosin Alpha-1 3mg/mL (Pharmacy B) [initials]
 Dosing: 15 units (0.45mg) daily
 Total Duration: 3 months`,
         "1 of 2 Installments (Wks 1-6)":
@@ -3096,7 +3374,7 @@ Total Duration: 6 weeks
 Dosing: Per medical direction
 Total Duration: 6 weeks
 
-[date] 2 vials of 5mL Thymosin Alpha-1 3mg/mL (Progress) [initials]
+[date] 2 vials of 5mL Thymosin Alpha-1 3mg/mL (Pharmacy B) [initials]
 Dosing: 15 units (0.45mg) daily
 Total Duration: 6 weeks`,
         "2 of 2 Installments (Wks 7-12)":
@@ -3108,7 +3386,7 @@ Total Duration: 6 weeks
 Dosing: Per medical direction
 Total Duration: 6 weeks
 
-[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Progress) [initials]
+[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Pharmacy B) [initials]
 Dosing: 15 units (0.45mg) daily
 Total Duration: 6 weeks`,
         "1 of 3 Installments (Wks 1-4)":
@@ -3121,7 +3399,7 @@ Total Duration: 1 month
 Dosing: Per medical direction
 Total Duration: 1 month
 
-[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Progress) [initials]
+[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Pharmacy B) [initials]
 Dosing: 15 units (0.45mg) daily
 Total Duration: 1 month`,
         "2 of 3 Installments (Wks 5-8)":
@@ -3133,7 +3411,7 @@ Total Duration: 1 month
 Dosing: Per medical direction
 Total Duration: 1 month
 
-[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Progress) [initials]
+[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Pharmacy B) [initials]
 Dosing: 15 units (0.45mg) daily
 Total Duration: 1 month`,
         "3 of 3 Installments (Wks 9-12)":
@@ -3145,7 +3423,7 @@ Total Duration: 1 month
 Dosing: Per medical direction
 Total Duration: 1 month
 
-[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Progress) [initials]
+[date] 1 vial of 5mL Thymosin Alpha-1 3mg/mL (Pharmacy B) [initials]
 Dosing: 15 units (0.45mg) daily
 Total Duration: 1 month`,
       },
@@ -3246,7 +3524,7 @@ Total Duration: 4 months
 Dosing: Reconstitute with 1mL BAC water then inject 0.5mL (50 units) subcutaneously twice weekly
 Total Duration: 2 months
 
-[date] 3 vials of 3mL Tesa 8mg/mL (Progress) [initials]
+[date] 3 vials of 3mL Tesa 8mg/mL (Pharmacy B) [initials]
 Dosing: Inject 12 units subcutaneously, 5 days on, 2 days off
 Total Duration: 3 months`,
         "1 of 2 Installments (MOTS-c)":
@@ -3255,7 +3533,7 @@ Total Duration: 3 months`,
 Dosing: Reconstitute with 1mL BAC water then inject 0.5mL (50 units) subcutaneously twice weekly
 Total Duration: 2 months`,
         "2 of 2 Installments (Tesa)":
-`[date] 3 vials of 3mL Tesa 8mg/mL (Progress) [initials]
+`[date] 3 vials of 3mL Tesa 8mg/mL (Pharmacy B) [initials]
 Dosing: Inject 12 units subcutaneously, 5 days on, 2 days off
 Total Duration: 3 months`,
       },

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FedEx Tracking Copier
 // @namespace    userscript-showcase
-// @version      2.8
+// @version      2.9
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Auto-copy tracking number + ship/label date from FedEx tracking pages
@@ -12,13 +12,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[FedEx v2.8] boot');
+console.info('[FedEx v2.9] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['FedEx'] = {
   name: 'FedEx Tracking Copier',
-  version: '2.8',
+  version: '2.9',
   state: 'idle',
   message: '',
   output: null,
@@ -66,6 +66,12 @@ window.__scripts['FedEx'] = {
       const t = s.textContent.trim();
       if (/^\d{12,}$/.test(t)) return t;
     }
+    // v2.9 (2026-09-11): URL fallback — FedEx email/deep links carry the number
+    // in ?trknbr= / ?tracknumbers=. The DOM paths above stay FIRST; this only
+    // fires when both fail (the same drift class that silently broke the UPS
+    // copier when UPS rotated a utility class off its tracking-number span).
+    const m = location.href.match(/[?&](?:trknbr|tracknumbers)=(\d{9,})/i);
+    if (m) return m[1];
     return null;
   }
 
@@ -145,8 +151,16 @@ window.__scripts['FedEx'] = {
       if (rowObserver) rowObserver.disconnect();
       const shipDate = getShipDate();
       if (!trackingNum || !shipDate) {
-        LOG('FAIL — tn:', trackingNum, 'date:', shipDate);
-        toast('⚠ No tracking data found', false);
+        // v2.9: name the script AND the failing half — the old generic
+        // "No tracking data found" toast left no way to tell WHICH tracking
+        // script was complaining (2026-09-11).
+        const why = !trackingNum
+          ? 'no tracking number found on this FedEx page'
+          : 'tracking number ' + trackingNum + ' found, but the ship date did not render';
+        LOG('FAIL — tn:', trackingNum, 'date:', shipDate, why);
+        const a = window.__scripts['FedEx'];
+        a.state = 'error'; a.error = why; a.message = why; a.lastActivity = Date.now();
+        toast('⚠ FedEx copier: ' + why, false);
         return;
       }
       copyAndClose(trackingNum, shipDate);

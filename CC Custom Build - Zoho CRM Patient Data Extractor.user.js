@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CC Custom Build - Zoho CRM Patient Data Extractor
 // @namespace    http://tampermonkey.net/
-// @version      1.48
+// @version      1.55
 // @description  Extract patient data from Zoho CRM: Copy Everything JSON payload + Create Order
 // @author       Jeyson Dagondon
 // @run-at       document-idle
@@ -14,13 +14,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[CC v1.48] boot');
+console.info('[CC v1.55] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['CC'] = {
   name: 'CC Custom Build - Zoho CRM Patient Data Extractor',
-  version: '1.48',
+  version: '1.51',
   state: 'idle',
   message: '',
   progress: null,
@@ -75,8 +75,10 @@ window.__scripts['CC'] = {
     // ========================================
     // PHARMACY RESTRICTION MAP (state abbr → restricted pharmacies)
     // Source: clinic pharmacy shipping matrix
-    // Pharmacy J = all 50 states (never restricted). Pharmacy A = all except ND.
-    // Pharmacy F / Pharmacy G have no restriction data → not checked.
+    // Pharmacy J = all 50 states (never restricted). Pharmacy A = all except ND; and
+    // since 2026-08-25 Pharmacy A also does NOT ship RETATRUTIDE to WA/TN/SC/NC/
+    // CT/CO/AK/OK (+ ND) — see RETATRUTIDE_STATES below (injected as conditional
+    // entries). Pharmacy F / Pharmacy G have no restriction data → not checked.
     // A "(...)" note marks a PARTIAL/conditional restriction (rendered amber).
     // ========================================
     const RESTRICTION_MAP = {
@@ -101,8 +103,8 @@ window.__scripts['CC'] = {
         NH: ['Pharmacy H'],
         NC: ['Pharmacy B', 'Pharmacy H'],
         ND: ['Pharmacy A'],
-        OH: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
-        OR: ['Formulation', 'Pharmacy E', 'Progress (for Thymosin Alpha-1)'],
+        OH: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C', 'Pharmacy A (Ohio meds)'],
+        OR: ['Formulation', 'Pharmacy E', 'Pharmacy B (for Thymosin Alpha-1)'],
         RI: ['Pharmacy H'],
         SC: ['Pharmacy D', 'Pharmacy B', 'Pharmacy E'],
         TX: ['Pharmacy D', 'Pharmacy I', 'Pharmacy C', 'Pharmacy H (no injections)'],
@@ -111,6 +113,26 @@ window.__scripts['CC'] = {
         WA: ['Pharmacy D', 'Formulation', 'Pharmacy C', 'Pharmacy E'],
         WV: ['Pharmacy D', 'Formulation', 'Pharmacy C']
     };
+
+    // ========================================
+    // RETATRUTIDE RESTRICTION (2026-08-25)
+    // Pharmacy A no longer ships RETATRUTIDE to these states (admin report):
+    //   Washington, Tennessee, South Carolina, North Carolina, Connecticut,
+    //   Colorado, Alaska, Oklahoma, North Dakota.
+    // ND already hard-blocks Pharmacy A above; the other 8 are injected as
+    // CONDITIONAL entries — rendered amber ("(Retatrutide only)") in the state
+    // field chips and flagged "⚠ no Retatrutide" on the Pharmacy A row of the
+    // pharmacy chooser. Other pharmacies in those states are unaffected.
+    // ========================================
+    // 2026-09-04: +OH — Pharmacy A admin email ("GLP-3 (all strengths)") = Retatrutide;
+    // Pharmacy A won't ship GLP-3/Retatrutide to Ohio shipping addresses.
+    const RETATRUTIDE_STATES = ['AK', 'CO', 'CT', 'NC', 'OK', 'SC', 'TN', 'WA', 'OH'];
+    for (const st of RETATRUTIDE_STATES) {
+        (RESTRICTION_MAP[st] = RESTRICTION_MAP[st] || []).push('Pharmacy A (Retatrutide only)');
+    }
+    // Full Pharmacy A-Retatrutide blocked set = the 8 conditional states + ND's
+    // existing hard block. Drives the "can't be sent Retatrutide" notice.
+    const RETATRUTIDE_BLOCKED_STATES = RETATRUTIDE_STATES.concat('ND');
 
     // ========================================
     // LIFEFILE PHARMACY → PORTAL URL MAP
@@ -145,6 +167,44 @@ window.__scripts['CC'] = {
         return 'failed';
     }
 
+    // ========================================
+    // PHARMACYL (portal.pharmacyl.example) — Create Order destination, NOT a LifeFile
+    // portal: Pharmacy L auth lives in shared cookies/localStorage, and multiple
+    // tabs of the same page are fine (Jeyson 2026-09-04), so each pick opens a
+    // FRESH tab carrying the patient payload as a base64url `bloomIntent` URL
+    // param. The portal-side Pharmacy L Patient Profile Autofill script reads it
+    // on /patients, opens Add Patient, and fills the form (human reviews +
+    // submits — never auto-submits). Rendered as the FIRST chooser row.
+    // ========================================
+    const PHARMACYL = {
+        key: 'pharmacyl',
+        name: 'Pharmacy L',
+        host: 'portal.pharmacyl.example',
+        url: 'https://portal.pharmacyl.example/patients',
+        family: 'pharmacyl'
+    };
+
+    function runPharmacyLSale(btn, payload, pharmacy) {
+        payload._bloom = { name: pharmacy.name, portalUrl: pharmacy.url, step: 'patients' };
+        const json = JSON.stringify(payload);
+        console.log('Create Order → Pharmacy L', payload);
+        GM.setClipboard(json);
+
+        const b64 = btoa(encodeURIComponent(json)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const sep = pharmacy.url.includes('?') ? '&' : '?';
+        window.open(pharmacy.url + sep + 'bloomIntent=' + b64, '_blank');
+
+        const originalText = btn.textContent;
+        btn.textContent = '✓ Pharmacy L opened';
+        btn.style.color = 'var(--ds-success,#0a8754)';
+        btn.style.background = 'rgba(10,135,84,0.10)';
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.color = 'var(--ds-danger,#b3261e)';
+            btn.style.background = 'transparent';
+        }, 2200);
+    }
+
     // Version marker — lets us confirm the RUNNING script version in the page.
     try { window.__lfSaleVer = '1.33'; } catch(e) { console.warn('[CC]', e); }
 
@@ -153,14 +213,29 @@ window.__scripts['CC'] = {
     // Is a pharmacy blocked from shipping to a state (per RESTRICTION_MAP)?
     // Substring match so 'Pharmacy B' hits 'Pharmacy B' etc.
     function isPharmacyRestricted(pharmName, stateAbbr) {
-        if (!stateAbbr) return false;
+        return !!pharmacyRestrictionInfo(pharmName, stateAbbr);
+    }
+
+    // Restriction DETAIL for a pharmacy in a state: null = not restricted,
+    // { full:true, note } = hard block, { full:false, note } = conditional/
+    // partial (parenthetical note, e.g. 'Pharmacy A (Retatrutide only)').
+    function pharmacyRestrictionInfo(pharmName, stateAbbr) {
+        if (!stateAbbr) return null;
         const restricted = RESTRICTION_MAP[stateAbbr];
-        if (!restricted) return false;
+        if (!restricted) return null;
         const pn = normPharm(pharmName);
-        return restricted.some((r) => {
+        const entry = restricted.find((r) => {
             const rn = normPharm(r);
             return pn.includes(rn) || rn.includes(pn);
         });
+        if (!entry) return null;
+        return { full: !/\(/.test(entry), note: entry };
+    }
+
+    // Parenthetical of a conditional entry, e.g. 'Pharmacy A (Retatrutide only)' → 'Retatrutide only'.
+    function conditionLabel(note) {
+        const m = String(note || '').match(/\(([^)]+)\)/);
+        return m ? m[1] : 'conditional';
     }
 
     // ========================================
@@ -957,6 +1032,9 @@ window.__scripts['CC'] = {
         const subtitle = opts.subtitle || 'Pick the pharmacy portal to create this order in.';
         const accent = opts.accent || 'var(--ds-accent,#b3261e)';
         const showRestriction = opts.showRestriction !== false;
+        // v1.50: Pharmacy A can't ship Retatrutide to certain states — banner so the
+        // admin sees it the moment the chooser opens (before picking a pharmacy).
+        const retaBlocked = state && RETATRUTIDE_BLOCKED_STATES.includes(state.toUpperCase());
 
         card.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -967,6 +1045,9 @@ window.__scripts['CC'] = {
                 ${patientName ? `<b>${patientName}</b>${state && showRestriction ? ` · ${state}` : ''}` : 'No patient data extracted yet'}
                 <br>${subtitle}
             </div>
+            ${retaBlocked ? `<div style="margin-bottom:10px;padding:10px 12px;background:#fdecea;border:1px solid #f5c6c2;border-radius:6px;color:var(--ds-danger,#b3261e);font-size:12px;font-weight:700;line-height:1.45;">
+                ⚠ <u>This patient can't be sent Retatrutide (GLP-3)</u> — Pharmacy A won't ship it to ${abbrToFull[state] || state}. Pick a different pharmacy or ship to the clinic.
+            </div>` : ''}
             <div style="display:flex;flex-direction:column;gap:8px;" id="lf-chooser-list"></div>
             <div style="margin-top:10px;color:#999;font-size:11px;">Esc to cancel</div>
         `;
@@ -974,8 +1055,13 @@ window.__scripts['CC'] = {
         document.body.appendChild(overlay);
 
         const list = card.querySelector('#lf-chooser-list');
-        for (const pharm of PHARMACY_URL_MAP) {
-            const restricted = isPharmacyRestricted(pharm.name, state);
+        for (const pharm of [PHARMACYL, ...PHARMACY_URL_MAP]) {
+            const info = pharmacyRestrictionInfo(pharm.name, state);
+            const status = info
+                ? (info.full
+                    ? { txt: '⚠ restricted', color: 'var(--ds-danger,#b3261e)' }
+                    : { txt: '⚠ ' + conditionLabel(info.note), color: 'var(--ds-warn,#8a5a00)' })
+                : { txt: '✓ ok', color: 'var(--ds-success,#0a8754)' };
             const btn = document.createElement('button');
             btn.style.cssText = `
                 display:flex; justify-content:space-between; align-items:center;
@@ -986,7 +1072,7 @@ window.__scripts['CC'] = {
                 <span style="font-weight:600;color:var(--ds-text,#1f1f1f);font-size:13px;">${pharm.name}
                     <span style="color:#999;font-weight:400;font-size:11px;"> (${pharm.host})</span>
                 </span>
-                ${showRestriction ? `<span style="font-size:11px;${restricted ? 'color:var(--ds-danger,#b3261e);font-weight:700;' : 'color:var(--ds-success,#0a8754);font-weight:600;'}white-space:nowrap;">${restricted ? '⚠ restricted' : '✓ ok'}</span>` : ''}
+                ${showRestriction ? `<span style="font-size:11px;${status.color};font-weight:700;white-space:nowrap;">${status.txt}</span>` : ''}
             `;
             btn.addEventListener('mouseenter', () => { btn.style.background = 'var(--ds-surface2,#eef2f7)'; });
             btn.addEventListener('mouseleave', () => { btn.style.background = 'var(--ds-surface2,#fafafa)'; });
@@ -1004,6 +1090,7 @@ window.__scripts['CC'] = {
     function runLifeFileSale(btn) {
         const payload = buildPayload();
         showPharmacyChooser(payload, (pharmacy) => {
+            if (pharmacy.family === 'pharmacyl') { runPharmacyLSale(btn, payload, pharmacy); return; }
             payload._lf = { pharmacy: pharmacy.key, name: pharmacy.name, portalUrl: pharmacy.url, loginUrl: pharmacy.url, step: 'session' };
             const json = JSON.stringify(payload);
             console.log('Create Order →', pharmacy.name, payload);
@@ -1309,7 +1396,8 @@ window.__scripts['CC'] = {
         { re: /^gender\s*identity$/i,         key: 'genderIdentity' },
         { re: /^language$/i,                  key: 'language' },
         { re: /^phone\s*number$/i,            key: 'phone' },
-        { re: /^email$/i,                     key: 'email' }
+        { re: /^email$/i,                     key: 'email' },
+        { re: /^allergies?$/i,                key: 'allergies' }
     ];
     // Detail section heading → payload key (Shipping Address is the PREFERRED address).
     const PRX_SECTION_MAP = [
@@ -1374,7 +1462,13 @@ window.__scripts['CC'] = {
     // Identity: label→value rows in the header card, plus the Height/BMI stats line.
     function prxExtractIdentity() {
         const identity = {};
-        document.querySelectorAll('.patient-header-detail .show_pat_content.pl-0').forEach(row => {
+        // Two row shapes carry label/value pairs: the identity block
+        // (.show_pat_content: name/dob/status/phone/email...) and the
+        // vitals block under it (.show_common_pat: Height/Weight/Allergies/
+        // Medications/BMI). Both are read — the Allergies row lives in the
+        // second one, so reading only the first silently dropped allergies
+        // from every payload (verified live 2026-09-11).
+        document.querySelectorAll('.patient-header-detail .show_pat_content.pl-0, .patient-header-detail .show_common_pat.pl-0').forEach(row => {
             const labelEl = row.querySelector('span.title_color');
             if (!labelEl) return;
             const label = (labelEl.textContent || '').replace(/\s*:\s*$/, '').trim();
@@ -1562,7 +1656,7 @@ window.__scripts['CC'] = {
         if (m.patientRef) payload.patientRef = m.patientRef;
         const name = prxNameFromBasicInfo((sections || {}).basicInfo) || prxSplitName(m.patientName);
         if (name) payload.name = name;
-        for (const k of ['dob', 'age', 'status', 'registeredDate', 'state', 'coach', 'genderAtBirth', 'genderIdentity', 'language', 'phone', 'email']) {
+        for (const k of ['dob', 'age', 'status', 'registeredDate', 'state', 'coach', 'genderAtBirth', 'genderIdentity', 'language', 'phone', 'email', 'allergies']) {
             if (m[k]) payload[k] = m[k];
         }
         if (identity.headerStats) payload.headerStats = identity.headerStats;
@@ -1623,6 +1717,25 @@ window.__scripts['CC'] = {
     // matches the Zoho shape where phone and cell are the same number).
     // No source / patientId / nested sections / _meta — that stays with the
     // walk (Collect All Tabs). Allergies/meds mapping: FUTURE build.
+    // Allergies reach the payload from two places: the Details sidebar identity
+    // row ("Allergies : Seasonal at best") and the collected Allergies tab
+    // ({Name:'Seasonal At Best', Created:'23 Jun 2026'}). Flatten either shape to
+    // the one string a portal's "Known Allergies" field wants.
+    function prxAllergyText(payload) {
+        const one = (x) => {
+            if (x == null) return '';
+            if (typeof x === 'string') return x.replace(/\s+/g, ' ').trim();
+            if (typeof x !== 'object' || x.error) return '';
+            const name = x.Name || x.name || x.Allergen || x.allergen || x.Allergy || x.allergy || '';
+            const reaction = x.Reaction || x.reaction || '';
+            return [String(name).trim(), reaction ? '(' + String(reaction).trim() + ')' : ''].filter(Boolean).join(' ');
+        };
+        const raw = payload && payload.allergies;
+        if (Array.isArray(raw)) return raw.map(one).filter(Boolean).join('; ');
+        if (raw && typeof raw === 'object') return Object.values(raw).map(one).filter(Boolean).join('; ');
+        return one(raw);
+    }
+
     function prxBuildFlatPayload(payload) {
         const lf = payload._lifeFileProfile || {};
         const flat = {};
@@ -1640,6 +1753,13 @@ window.__scripts['CC'] = {
         if (payload.state) flat.stateFullName = payload.state; // identity row, e.g. "California"
         if (lf.state) flat.state = lf.state;                   // abbr, e.g. "CA"
         if (lf.zip) flat.zip = lf.zip;
+        // v1.55: RxFlow's own Patient ID ("PAT..." from the identity row) has
+        // to travel with the flat payload — it is what the Patient Data Injector
+        // writes into Zoho's "RxFlow Patient ID" (CONTACTCF204) field, and it
+        // was the one thing Copy Patient Data was dropping (Jeyson 2026-09-15).
+        if (payload.patientRef) flat.patientRef = payload.patientRef;
+        const allergies = prxAllergyText(payload);
+        if (allergies) flat.allergies = allergies;
         return flat;
     }
 
@@ -2113,7 +2233,11 @@ window.__scripts['CC'] = {
         api.message = `Extracted ${keyFields.length} field(s)` + (payload.dob ? ' + DOB' : '');
         api.lastActivity = Date.now();
         // Also copy JSON to clipboard (preserves the manual behavior)
-        try { GM.setClipboard(JSON.stringify(payload)); } catch(e) {}
+        // v1.49: never swallow a clipboard failure silently — toast it (the
+        // API output above is the primary channel, but the user should know
+        // the manual paste fallback won't work either).
+        try { GM.setClipboard(JSON.stringify(payload)); }
+        catch (e) { console.warn('[CC] clipboard', e); ccToast('✗ clipboard blocked'); }
         console.log('[CC] API extract:', xml);
         return { ok: true, output: xml };
       }

@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         LifeFile Order Autofill
 // @namespace    http://tampermonkey.net/
-// @version      1.18
+// @version      1.23
 // @author       Jeyson Dagondon
-// @description  One-click LifeFile order autofill: step-1 auto-submit, patient search-or-create
+// @description  LifeFile order autofill: patient search-or-create + order-form fill (no auto-submit, no step-2)
 // @match        https://hostB.pharmalink.example/*
 // @match        https://hostA.pharmalink.example/*
 // @match        https://hostC.pharmalink.example:8443/*
@@ -14,17 +14,29 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Autofill v1.18] boot');
+console.info('[LF-Autofill v1.23] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1.18', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1.23', state: 'idle', message: 'Loaded', progress: null, output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
 
 (function () {
     'use strict';
+
+    // --- Script API (R18): reference the registered object + state helper ---
+    const api = window.__scripts['LF-Autofill'];
+    function apiSet(state, message, extra) {
+        api.state = state;
+        api.message = message || '';
+        api.lastActivity = Date.now();
+        if (extra) Object.assign(api, extra);
+        if (state === 'error') api.error = message || '';
+        if (state === 'done' || state === 'idle') { api.error = null; }
+        console.info(`[LF-Autofill] API: ${state}${message ? ' — ' + message : ''}`);
+    }
 
     // ---- DEBUG: flip to true to log every setSelect to console ----
     const DEBUG = false;
@@ -51,7 +63,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
     const PROFILE_PRIORITY = ['Jones', 'Finley'];
 
     // ========================================
-    // FULL-SALE ORCHESTRATION (Phases 3 & 4)
+    // ORDER-FORM FILL + CLINIC SHIP-TO OVERRIDE
     // ========================================
     // Hardcoded clinic shipping address — identical across ALL pharmacy portals
     // (Pharmacy A's portal had a different clinic address; hardcoding makes the
@@ -64,15 +76,9 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
     };
     // Per-run sale intent (patient data + pharmacy) written by the Session Handler.
     const SALE_INTENT_KEY = 'lf_sale_intent';
-    // Marker set right before the step-1 submit so the step-2 product page knows
-    // to auto-open the product/template dropdown.
-    const STEP2_MARKER_KEY = 'lf_step2_open';
     // Tracks the exact search string already run on the patient-search page so a
     // page reload (POST) doesn't re-run the search in a loop.
     const SEARCHED_KEY = 'lf_searched';
-    // Set when a restricted state reroutes the order to ship to the clinic; the
-    // step-2 handler shows the big clinic notice once My RxList appears.
-    const CLINIC_FLAG_KEY = 'lf_clinic_ship';
 
     function getSaleIntent() {
         try {
@@ -87,9 +93,6 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
     function isOrderCheck() {
         const intent = getSaleIntent();
         return !!(intent && intent._lf && intent._lf.step === 'orders');
-    }
-    function isClinicShip() {
-        try { return sessionStorage.getItem(CLINIC_FLAG_KEY) === '1'; } catch (e) { return false; }
     }
     function formatDob(dob) {
         if (!dob || !dob.m || !dob.d || !dob.y) return '';
@@ -121,52 +124,6 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         }
     }
 
-    // Big persistent clinic-shipping warning overlay.
-    function showClinicOverlay() {
-        const existing = document.getElementById('lf-clinic-overlay');
-        if (existing) { existing.style.display = 'block'; return existing; }
-        if (!document.getElementById('_lf_clinic_style')) {
-            const st = document.createElement('style');
-            st.id = '_lf_clinic_style';
-            st.textContent = `
-                @keyframes lfClinicPulse { 0%,100% { box-shadow: 0 0 10px 2px rgba(255,80,40,0.8); } 50% { box-shadow: 0 0 26px 10px rgba(255,80,40,0.55); } }
-            `;
-            document.head.appendChild(st);
-        }
-        const ov = document.createElement('div');
-        ov.id = 'lf-clinic-overlay';
-        ov.style.cssText = `
-            position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
-            z-index: 2147483646; background: var(--ds-danger,#b3261e); color: #fff; padding: 16px 24px;
-            border-radius: 8px; font-family: system-ui, sans-serif; font-size: 15px;
-            font-weight: 800; box-shadow: 0 4px 20px rgba(0,0,0,0.4); text-align: center;
-            max-width: 92vw; animation: lfClinicPulse 1.2s ease-in-out infinite;
-            pointer-events: none;
-        `;
-        ov.textContent = `⚠ THIS ORDER SHIPS TO THE CLINIC — ${CLINIC_ADDRESS.address}, ${CLINIC_ADDRESS.city}, ${CLINIC_ADDRESS.state} ${CLINIC_ADDRESS.zip} (NOT the patient)`;
-        const dismiss = () => { ov.dataset.dismissed = '1'; ov.style.display = 'none'; };
-        // Dismiss on the first click ANYWHERE on the page. pointer-events:none on
-        // the banner means the click passes through to the page underneath.
-        document.addEventListener('click', dismiss, { once: true });
-        document.body.appendChild(ov);
-        return ov;
-    }
-
-    // Show the big clinic-shipping notice once My RxList has rendered on step 2.
-    // It stays until the user clicks anywhere on the page. Idempotent — safe to
-    // call repeatedly (showClinicOverlay re-shows the same element).
-    function showClinicNoticeOnRxList() {
-        if (!isClinicShip()) return;
-        const ov = showClinicOverlay();
-        ov.style.display = 'none'; // hold until My RxList actually renders
-        const start = Date.now();
-        const ready = () => !!document.querySelector('.med_accordion_control, [class*="med_accordion"]');
-        (function waitRx() {
-            if (ov.dataset.dismissed) return; // user already clicked it away
-            if (ready() || Date.now() - start > 10000) { ov.style.display = 'block'; return; }
-            setTimeout(waitRx, 400);
-        })();
-    }
 
     // ========================================
     // PHARMACY DETECTION: Provider ID → pharmacy name
@@ -206,6 +163,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         WA: ['Pharmacy D', 'Pharmacy C'],
         WV: ['Pharmacy D', 'Pharmacy C'],
     };
+
 
     // ---- helpers ----
     const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toUpperCase();
@@ -344,12 +302,15 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         return '';
     }
 
-    // Check if a pharmacy is restricted from shipping to a given state.
+    // Check if a pharmacy is hard-restricted from shipping to a given state.
+    // State-level blocks only — the med-specific (conditional) rules were step-2
+    // guardrails and no longer apply since the product form is handled elsewhere.
     function isRestricted(pharmacyName, stateAbbr) {
         if (!pharmacyName || !stateAbbr) return false;
         const restricted = RESTRICTION_MAP[stateAbbr];
         if (!restricted) return false;
-        return restricted.some((name) => norm(name) === norm(pharmacyName));
+        const pn = norm(pharmacyName);
+        return restricted.some((name) => norm(name) === pn);
     }
 
     // Pulsating glow on an element to draw attention (e.g., Copy Doctor button).
@@ -385,12 +346,102 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         if (window.jQuery) window.jQuery(el).trigger('change');
     }
 
+    // ========================================
+    // STEP-1 MANUAL TOGGLES — big enough to hit without aiming
+    // ========================================
+    // "Check here if there are no allergies" (#chk_no_allergies) and "Check here
+    // if there are no diagnosis" (#chk_no_diagnostics) are NEVER auto-ticked:
+    // both are clinical decisions the operator owns (allergies are recorded on
+    // the form; a real diagnosis may exist). They render as small checkboxes in
+    // a dense table, so enlarge the box, enlarge the caption, and let the
+    // caption itself toggle the box — the click still goes through LifeFile's
+    // bound jQuery handler, which writes the description field that validation
+    // actually reads (R4: the checkbox state alone is never enough). The
+    // description field beside them gets a bigger font so it is easy to click
+    // into and read.
+    const MANUAL_TOGGLE_IDS = ['chk_no_allergies', 'chk_no_diagnostics'];
+
+    // The block that holds ONLY this checkbox's caption. Climb from the box
+    // until we find text, but STOP before any block that also holds another
+    // control — the caption usually shares its cell/row with the description
+    // input, and clicks there must never toggle the box.
+    function toggleCaptionFor(cb) {
+        let el = cb.parentElement;
+        for (let depth = 0; el && el !== document.body && depth < 5; depth++, el = el.parentElement) {
+            const others = Array.from(el.querySelectorAll('input, select, textarea, button, a'))
+                .filter((x) => x !== cb);
+            if (others.length) return null;
+            if ((el.textContent || '').trim().length > 2) return el;
+        }
+        return null;
+    }
+
+    function enlargeManualToggles() {
+        for (const id of MANUAL_TOGGLE_IDS) {
+            const cb = document.getElementById(id);
+            if (!cb || cb.dataset.lfBigToggle === '1') continue;
+            cb.dataset.lfBigToggle = '1';
+
+            // 1. The box itself — a target you can hit without aiming.
+            cb.style.width = '22px';
+            cb.style.height = '22px';
+            cb.style.margin = '0 8px 0 0';
+            cb.style.verticalAlign = 'middle';
+            cb.style.cursor = 'pointer';
+            cb.style.accentColor = 'var(--ds-accent, #8a5f2e)';
+
+            // 2. A real <label> already toggles the box when its text is clicked
+            //    — just enlarge the text.
+            const labels = (cb.labels && cb.labels.length) ? Array.from(cb.labels) : [];
+            if (labels.length) {
+                for (const l of labels) {
+                    l.style.fontSize = '17px';
+                    l.style.fontWeight = '700';
+                    l.style.cursor = 'pointer';
+                }
+            } else {
+                // 3. No <label> element: enlarge the caption block and wire its
+                //    clicks to the box (never hijacking another control).
+                const caption = toggleCaptionFor(cb);
+                if (caption) {
+                    caption.style.fontSize = '17px';
+                    caption.style.fontWeight = '700';
+                    caption.style.cursor = 'pointer';
+                    caption.style.userSelect = 'none';
+                    caption.addEventListener('click', (e) => {
+                        if (e.target === cb) return; // native toggle
+                        if (e.target.closest && e.target.closest('input, select, textarea, button, a')) return;
+                        cb.click(); // runs LifeFile's bound handler (writes the description field)
+                    });
+                } else if (cb.parentElement) {
+                    // Caption shares its block with other controls — enlarge the
+                    // text only; the box itself is already a big target.
+                    cb.parentElement.style.fontSize = '17px';
+                }
+            }
+
+            // 4. The description field(s) these boxes belong to — allergy rows
+            //    carry the app's own `.allergy` class; the diagnosis description
+            //    is id/name-matched. Bigger font = easier to click into/read.
+            const fields = document.querySelectorAll(
+                'input.allergy, textarea.allergy, input[id*="diagnos" i], textarea[id*="diagnos" i], ' +
+                'input[name*="diagnos" i], textarea[name*="diagnos" i]'
+            );
+            for (const f of fields) {
+                if (f === cb || f.dataset.lfBigToggleField === '1') continue;
+                f.dataset.lfBigToggleField = '1';
+                f.style.fontSize = '16px';
+            }
+        }
+    }
+
     // ---- the main sequence ----
     async function run(btn) {
         const original = btn.textContent;
         btn.textContent = 'Working...';
         btn.style.pointerEvents = 'none';
         let stopPulse = () => {};
+        apiSet('running', 'Autofilling order form…');
         try {
             // 0. Detect which pharmacy portal we're on
             const pharmacy = detectPharmacy();
@@ -491,22 +542,16 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
                 }
             }
 
-            // 4. Checkboxes: no allergies + no diagnostics.
-            // LifeFile binds these to jQuery .click(); when checked the handler writes
-            // "NO KNOWN ALLERGIES"/"NO KNOWN DIAGNOSIS" into the description fields —
-            // that is what actually satisfies validation. Toggling .checked alone is
-            // not enough. Also re-runnable so a bounced step-1 re-render can refill.
-            const checkNoAllergyNoDiagnosis = () => {
-                ['#chk_no_allergies', '#chk_no_diagnostics'].forEach((id) => {
-                    const cb = document.querySelector(id);
-                    if (!cb) return;
-                    cb.checked = true;
-                    if (window.jQuery) window.jQuery(cb).trigger('click');
-                    cb.dispatchEvent(new Event('change', { bubbles: true }));
-                    cb.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                });
-            };
-            checkNoAllergyNoDiagnosis();
+            // 4. Step-1 toggles: BOTH are left to the operator — neither the
+            //    "Check here if there are no allergies" box (#chk_no_allergies)
+            //    nor the "Check here if there are no diagnosis" box
+            //    (#chk_no_diagnostics) is auto-ticked. Allergies are recorded on
+            //    the form and a real diagnosis may exist, so the human makes the
+            //    call. Both are enlarged (box + caption + the description field
+            //    next to them) so they are easy to hit — the operator's click
+            //    still runs LifeFile's bound jQuery handler, which is what writes
+            //    the description field validation reads (R4).
+            enlargeManualToggles();
 
             // 5–8. BILLING (optional — some portals like Pharmacy C auto-bill
             //       and have no payor/profile selectors at all).
@@ -571,7 +616,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
                 log('No payor selector found — portal auto-bills (e.g. Pharmacy C). Skipping billing steps.');
             }
 
-            // 9. RECIPIENT TYPE + CLINIC OVERRIDE + STEP-1 AUTO-SUBMIT (Phase 4)
+            // 9. RECIPIENT TYPE + CLINIC OVERRIDE
             const recipientSel = document.querySelector('#sel_shipping_recipient_type');
             if (recipientSel) {
                 const target = shippedToClinic ? 'clinic' : 'patient';
@@ -587,43 +632,14 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
                     glow(document.querySelector('#sel_shipping_patient_state'));
                 }
                 setInput(document.querySelector('#txt_shipping_patient_zip'), a.zip);
-                // Defer the big clinic-shipping notice to step 2 (when My RxList
-                // appears); just record the flag for the step-2 handler here.
-                try { sessionStorage.setItem(CLINIC_FLAG_KEY, '1'); } catch(e) { console.warn('[LF-Autofill]', e); }
-            } else {
-                try { sessionStorage.removeItem(CLINIC_FLAG_KEY); } catch(e) { console.warn('[LF-Autofill]', e); }
             }
             await sleep(600);
 
-            // Auto-submit the step-1 shipping page ONLY during an automated sale
-            // (sale intent present). The FIRST click can bounce back to step 1 with
-            // a validation error while the checkbox/server state settles; if the
-            // step-1 button still exists after submitting, click it again (bounded).
-            if (getSaleIntent()) {
-                const findFwd = () => Array.from(document.querySelectorAll('a.bg_forward')).find((el) => {
-                    const oc = el.getAttribute('onclick') || '';
-                    return oc.indexOf('submit_step_1_new') !== -1;
-                });
-                let fwd = findFwd();
-                if (fwd) {
-                    statusNote('Submitting shipping info → product page…');
-                    clearSaleIntent();
-                    try { sessionStorage.setItem(STEP2_MARKER_KEY, '1'); } catch(e) { console.warn('[LF-Autofill]', e); }
-                    for (let attempt = 0; attempt < 3 && fwd; attempt++) {
-                        if (attempt > 0) checkNoAllergyNoDiagnosis(); // re-fill after a bounce re-render
-                        clickEl(fwd);
-                        await sleep(2500);
-                        fwd = findFwd(); // gone = we advanced; present = bounced back
-                        if (!fwd) break;
-                        statusNote(`Step-1 validation bounced (attempt ${attempt + 1}) — retrying…`, '#b3261e');
-                    }
-                    if (fwd) {
-                        statusNote('Step-1 still rejecting after retries — please click Medication Information', 'red', true);
-                    }
-                } else {
-                    statusNote('Step-1 submit not found — please click Medication Information', 'red', true);
-                }
-            }
+            // No auto-submit: the operator reviews the filled order form, ticks
+            // the allergies / no-diagnosis boxes (both manual), and clicks
+            // "Medication Information" themselves (the product/medication form
+            // is handled outside this script now).
+            apiSet('waiting_human', 'Order form filled — tick allergies / no-diagnosis, then submit manually');
 
             // Final status
             if (shippedToClinic) {
@@ -639,6 +655,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
             btn.textContent = original;
         } catch (err) {
             console.error('[LifeFile Autofill]', err);
+            apiSet('error', (err && err.message) ? err.message : String(err));
             btn.textContent = 'Error (see console)';
             try { stopPulse(); } catch(_) { console.warn('[LF-Autofill]', _); }
             await sleep(2000);
@@ -712,6 +729,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         const intent = getSaleIntent();
         if (!intent || !intent.firstName || !intent.lastName) return false;
         if (isOrderCheck()) return false; // orders mode never runs the sale search
+        apiSet('running', `Searching patient — ${intent.firstName} ${intent.lastName}`);
 
         // Permutation state persisted in sessionStorage so a full-page POST reload
         // (which re-runs this script) continues from the same split, not from 0.
@@ -778,7 +796,10 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
             if (doneKey !== perm.key) {
                 const box = document.querySelector('#txt_search');
                 const btn = document.querySelector('#btn_search_button');
-                if (!box || !btn) return false;
+                if (!box || !btn) {
+                    apiSet('error', 'Patient search controls not found on this page');
+                    return false;
+                }
                 const nameRadio = document.querySelector('#rad_search_type-name');
                 if (nameRadio && !nameRadio.checked) nameRadio.checked = true;
                 statusNote(`Searching ${perm.last}, ${perm.first}…`);
@@ -800,6 +821,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
                     clickEl(sel);
                     clearPermState();
                     clearSearchedKey();
+                    apiSet('running', `Patient matched — ${perm.last}, ${perm.first} selected; proceeding to the order flow`);
                     return true;
                 }
             }
@@ -810,6 +832,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         clearPermState();
         clearSearchedKey();
         statusNote('No matching patient — opening New Patient form…');
+        apiSet('error', `No matching patient found after ${perms.length} search permutation(s) — opened the New Patient form (manual creation)`);
         location.href = '/application_main_zfw/poepatient/newpatient';
         return true;
     }
@@ -832,42 +855,6 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         return true;
     }
 
-    // ========================================
-    // PHASE 4 — STEP-2 PRODUCT DROPDOWN
-    // On the step-2 medication/product page, load the clinic's most-common
-    // peptides (My RxList) and surface the order-set/template dropdown so the
-    // operator can pick the peptide (template naming is inconsistent, so the pick
-    // stays manual).
-    // NOTE: step-1 submit posts to poeorderinfo/to_new_step_2/1 but the server
-    // REDIRECTS to /poeerx/poenewrxinfo — that's the real step-2 URL.
-    // ========================================
-    function tryOpenProductDropdown() {
-        if (location.pathname.indexOf('/poeerx/poenewrxinfo') === -1) return false;
-        let marker = '0';
-        try { marker = sessionStorage.getItem(STEP2_MARKER_KEY) || '0'; } catch(e) { console.warn('[LF-Autofill]', e); }
-        if (marker !== '1') return false;
-        try { sessionStorage.removeItem(STEP2_MARKER_KEY); } catch(e) { console.warn('[LF-Autofill]', e); }
-
-        statusNote('Step 2 — loading My RxList (clinic common peptides)…', '#b3261e', true);
-
-        // Load the clinic's most-common peptides (My RxList).
-        const rxList = document.querySelector('#sel_rx_list');
-        if (rxList && Array.from(rxList.options).some((o) => o.value === 'my_rx_list')) {
-            if (!setSelect(rxList, 'my_rx_list')) glow(rxList);
-        }
-        // Surface the order-set/template dropdown for a quick manual pick.
-        const orderSet = document.querySelector('#sel_order_set_list');
-        if (orderSet) {
-            try {
-                orderSet.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                orderSet.focus();
-            } catch (e) { log('order-set dropdown focus failed', e); }
-        }
-        // Big clinic-shipping notice appears HERE — once My RxList is up — and
-        // stays until the user clicks anywhere on the page.
-        showClinicNoticeOnRxList();
-        return true;
-    }
 
     // ========================================
     // PAGE CHAIN: Select → eRx → Autofill
@@ -989,21 +976,60 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         // New-patient page: watch for save, then start the eRx chain (Phase 3)
         tryHandleNewPatientPage();
 
-        // Step-2 product page: auto-open the product/template dropdown (Phase 4)
-        tryOpenProductDropdown();
-
-        // Step-2 product page: big clinic-shipping notice once My RxList appears
-        // (also covers manual runs; tryOpenProductDropdown covers the sale flow).
-        if (location.pathname.indexOf('/poeerx/poenewrxinfo') !== -1) {
-            showClinicNoticeOnRxList();
-        }
-
         // Order form page: inject manual button + auto-run if chain is active
         if (!isPatientList && !isControlPanel) {
+            // Step-1 toggles are manual — enlarge them up front so the operator
+            // can hit them even when the autofill never runs this load.
+            enlargeManualToggles();
             injectButton();
             tryAutoRunAutofill();
         }
     }
+
+    // R18: trigger dispatcher (agent entry point) — defined AFTER the functions
+    // it dispatches to.
+    api.trigger = function (action, params) {
+        if (action === 'start') {
+            if (api.state === 'running') return { ok: false, error: 'already running' };
+            const intent = params && params.intent;
+            if (!intent || typeof intent !== 'object') return { ok: false, error: 'params.intent is required' };
+            let j = null;
+            try { j = JSON.stringify(intent); } catch (e) { return { ok: false, error: 'intent is not JSON-serializable' }; }
+            try {
+                sessionStorage.setItem(SALE_INTENT_KEY, j);
+                localStorage.setItem(SALE_INTENT_KEY, j);
+            } catch (e) { return { ok: false, error: 'could not persist intent to storage' }; }
+            apiSet('running', `Triggered start — ${intent.firstName || '?'} ${intent.lastName || ''}`);
+            const path = location.pathname || '';
+            if (path.indexOf('/poe/searchpatient') !== -1) {
+                // Patient search page: the permutation search picks or creates.
+                trySearchPatient();
+            } else if (path.indexOf('/poepatient/newpatient') !== -1) {
+                // New-patient form: the Profile Autofill fills it; the human saves.
+                tryHandleNewPatientPage();
+                apiSet('waiting_human', 'New-patient form — fill & save (Profile Autofill fills it)');
+            } else if (path.indexOf('/poeerx/poeorderinfo') !== -1) {
+                // Step-1 order form: inject the button and run the autofill.
+                const tryRun = (n) => {
+                    injectButton();
+                    const btn = document.querySelector('#lf_autofill_btn');
+                    if (btn) { run(btn); return true; }
+                    if (n > 0) { setTimeout(() => tryRun(n - 1), 800); return false; }
+                    apiSet('error', 'Step-1 order form not found — cannot autofill');
+                    return false;
+                };
+                tryRun(5);
+            } else {
+                apiSet('waiting_human', 'Intent persisted — not on a LifeFile flow page; navigate or reload');
+            }
+            return { ok: true };
+        }
+        if (action === 'reset') {
+            apiSet('idle', 'Reset — cleared to idle');
+            return { ok: true };
+        }
+        return { ok: false, error: `unknown action: ${action}` };
+    };
 
     // Run init now and re-run on DOM changes (LifeFile re-renders dynamically)
     const obs = new MutationObserver(() => {
@@ -1013,6 +1039,9 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         if (!document.querySelector('#lf_autofill_btn')) {
             injectButton();
         }
+        // Re-apply the enlarged manual toggles — the form re-renders (Copy
+        // Patient Information, validation bounces) recreate the checkboxes.
+        enlargeManualToggles();
     });
     obs.observe(document.documentElement, { childList: true, subtree: true });
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UPS Tracking Copier
 // @namespace    userscript-showcase
-// @version      2.9
+// @version      2.10
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Auto-copy tracking details from UPS tracking pages
@@ -12,13 +12,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[UPS v2.9] boot');
+console.info('[UPS v2.10] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['UPS'] = {
   name: 'UPS Tracking Copier',
-  version: '2.9',
+  version: '2.10',
   state: 'idle',
   message: '',
   progress: null,
@@ -33,16 +33,49 @@ window.__scripts['UPS'] = {
 (function () {
   'use strict';
 
-  function extract() {
-    const tnEl = document.querySelector('span.mb-0.ups-txt-black.ups-txt_size_md.ups-txt-weight_medium');
-    const trackingNum = tnEl?.textContent?.trim();
-    const billedEl = document.querySelector('#stApp_txtAdditionalInfoBilledOn');
-    const billedRaw = billedEl?.textContent?.trim();
-    if (!trackingNum || !billedRaw) return null;
-    const parts = billedRaw.split('/');
-    if (parts.length !== 3) return null;
-    const shipped = `${parseInt(parts[0])}/${parseInt(parts[1])}/${parts[2].slice(-2)}`;
-    return `\nDate Shipped: ${shipped}\nTN: UPS - ${trackingNum}`;
+  // v2.10 (2026-09-11): UPS dropped the `mb-0` utility class from the
+  // tracking-number span (it now ships `pr-1`, verified live), so the old
+  // `span.mb-0.ups-txt-black...` selector matched NOTHING on every tracking
+  // page and the copier reported "No tracking data found" for a perfectly
+  // good page. Match the STABLE ups-txt-* classes only, then fall back to the
+  // URL param (our own links use ?trackNums=, UPS email links ?tracknum=) and
+  // finally to the rendered page text. Never put a margin/padding utility
+  // class back into this selector — UPS rotates those without notice.
+  function getTrackingNumber() {
+    const cands = document.querySelectorAll(
+      'span.ups-txt-black.ups-txt_size_md.ups-txt-weight_medium,' +
+      'span[class*="ups-txt-weight_medium"].ups-txt-black');
+    for (const el of cands) {
+      const t = (el.textContent || '').trim();
+      if (/^1Z[0-9A-Z]{16}$/i.test(t)) return t.toUpperCase();
+    }
+    const m = location.href.match(/[?&]trackNums?=([^&#]+)/i);
+    if (m) {
+      let u = m[1];
+      try { u = decodeURIComponent(u); } catch (e) { /* keep the raw value */ }
+      u = u.trim();
+      if (/^1Z[0-9A-Z]{16}$/i.test(u)) return u.toUpperCase();
+    }
+    const b = (document.body ? document.body.innerText : '').match(/\b1Z[0-9A-Z]{16}\b/i);
+    return b ? b[0].toUpperCase() : '';
+  }
+
+  // Same drift class as the tracking number: keep the id fast path, but fall
+  // back to the "Shipped / Billed On" label's own date if the id ever rotates.
+  function getShippedDate() {
+    let raw = (document.querySelector('#stApp_txtAdditionalInfoBilledOn')?.textContent || '').trim();
+    if (!raw) {
+      for (const el of document.querySelectorAll('strong, span, p, div, label, dt, dd')) {
+        if (el.children.length) continue;
+        if (!/^shipped\s*\/?\s*billed\s*on$/i.test((el.textContent || '').trim())) continue;
+        const scope = el.parentElement || el;
+        const mm = (scope.innerText || scope.textContent || '').match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+        if (mm) { raw = mm[1]; break; }
+      }
+    }
+    const p = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+    if (!p) return '';
+    return `${parseInt(p[1], 10)}/${parseInt(p[2], 10)}/${p[3].slice(-2)}`;
   }
 
   function toast(msg, success) {
@@ -62,10 +95,20 @@ window.__scripts['UPS'] = {
 
   function run() {
     const api = window.__scripts['UPS'];
-    const text = extract();
+    const trackingNum = getTrackingNumber();
+    const shipped = getShippedDate();
+    const text = (trackingNum && shipped)
+      ? `\nDate Shipped: ${shipped}\nTN: UPS - ${trackingNum}`
+      : null;
     if (!text) {
-      api.state = 'error'; api.error = 'No tracking data found'; api.message = 'No tracking data found'; api.lastActivity = Date.now();
-      toast('⚠ No tracking data found', false);
+      // v2.10: name the script AND the failing half — the old generic
+      // "No tracking data found" forced a hunt through three scripts to find
+      // which one was complaining (2026-09-11).
+      const why = !trackingNum
+        ? 'no tracking number found on this UPS page'
+        : 'tracking number ' + trackingNum + ' found, but the shipped date did not render';
+      api.state = 'error'; api.error = why; api.message = why; api.lastActivity = Date.now();
+      toast('⚠ UPS copier: ' + why, false);
       return;
     }
     api.output = text;

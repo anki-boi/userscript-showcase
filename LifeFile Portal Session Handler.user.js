@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LifeFile Portal Session Handler
 // @namespace    http://tampermonkey.net/
-// @version      1.25
+// @version      1.26
 // @description  LifeFile pharmacy portal driver for Zoho's Run LifeFile Sale intent (passive)
 // @author       Jeyson Dagondon
 // @match        https://hostB.pharmalink.example/*
@@ -14,17 +14,29 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Session v1.25] boot');
+console.info('[LF-Session v1.26] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['LF-Session'] = { name: 'LifeFile Portal Session Handler', version: '1.25', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['LF-Session'] = { name: 'LifeFile Portal Session Handler', version: '1.26', state: 'idle', message: 'Loaded', progress: null, output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
 
 (function () {
     'use strict';
+
+    // --- Script API (R18): reference the registered object + state helper ---
+    const api = window.__scripts['LF-Session'];
+    function apiSet(state, message, extra) {
+        api.state = state;
+        api.message = message || '';
+        api.lastActivity = Date.now();
+        if (extra) Object.assign(api, extra);
+        if (state === 'error') api.error = message || '';
+        if (state === 'done' || state === 'idle') { api.error = null; }
+        console.info(`[LF-Session] API: ${state}${message ? ' — ' + message : ''}`);
+    }
 
     // ========================================
     // CREDENTIALS — hardcoded (Jeyson's override, 2026-08-04)
@@ -193,6 +205,17 @@ const CREDS = { /* per-user */ };
         'hostC.pharmalink.example': 'progress',
         'hostA.pharmalink.example': 'hostA',
         'hostD.pharmalink.example': 'hostD'
+    };
+    // Pharmacy key → login URL map (mirrors the Zoho extractor's PHARMACY_URL_MAP)
+    // so the R18 trigger can build a minimal intent without a Zoho run.
+    const PHARMACY_URL_MAP = {
+        pharmacya:     'https://hostB.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorA/frm/stdlogin/access/doctor',
+        progress:    'https://hostC.pharmalink.example:8443/application_main_zfw/login/login/vendor_name/vendorB/frm/stdlogin/access/doctor',
+        pharmacyc:   'https://hostA.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorC/access/doctor',
+        pharmacyd:   'https://hostA.pharmalink.example/application_main_zfw/login/login/vendor_name/pharmacyd/frm/stdlogin/access/doctor',
+        pharmacye: 'https://hostB.pharmalink.example/application_main_zfw/login/login/access/doctor/vendor_name/vendorE/logout/1',
+        pharmacyf:    'https://hostD.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorF/access/doctor',
+        pharmacyg:    'https://hostD.pharmalink.example/application_main_zfw/login/login/vendor_name/vendorG/access/doctor'
     };
     // Vendor from a login/portal-entry URL's `/vendor_name/<vendor>/` segment.
     function currentVendor() {
@@ -393,11 +416,13 @@ const CREDS = { /* per-user */ };
     async function drive() {
         const intent = parseIntent();
         if (!intent) return; // passive: no Zoho sale intent
+        apiSet('running', `Handling LifeFile intent — ${intent._lf.name || intent._lf.pharmacy}`);
 
         // LifeFile denied access (a protected page hit while logged out) — bounce to
         // the pharmacy login so auto-login can take over.
         if (isAccessDeniedPage() && intent._lf && intent._lf.loginUrl) {
             status('Access denied — going to login…', 'red', true);
+            apiSet('running', 'Access denied — redirecting to login');
             location.href = buildUrlWithIntent(intent._lf.loginUrl, intent);
             return;
         }
@@ -412,7 +437,7 @@ const CREDS = { /* per-user */ };
 
         const fresh = hasUrlIntent();
         if (fresh) { resetDone(); resetAttempts(); } // brand-new run from Zoho
-        else if (getDone()) return; // already handed off to the patient flow
+        else if (getDone()) { apiSet('done', 'Already handed off to the patient flow'); return; } // already handed off to the patient flow
 
         const lf = intent._lf;
         status(`LifeFile sale → ${lf.name || lf.pharmacy}`);
@@ -427,6 +452,7 @@ const CREDS = { /* per-user */ };
         if (settled === 'modal') {
             const entry = buildEntryUrl(intent);
             status('Another session running — auto-clearing + reloading…', 'red', true);
+            apiSet('running', 'Another session running — auto-clearing + reloading…');
             const btn = findSessionModalContinue();
             if (btn) btn.click();
             await sleep(2500);
@@ -445,6 +471,7 @@ const CREDS = { /* per-user */ };
             if (cur && cur !== lf.pharmacy) {
                 // Logged in on the WRONG pharmacy — log out, then bounce to the right portal.
                 status(`On ${cur} — logging out to switch to ${lf.name}…`, 'red', true);
+                apiSet('running', `On ${cur} — logging out to switch to ${lf.name}…`);
                 setPharmSwitch(buildEntryUrl(intent));
                 location.href = '/application_main_zfw/login/ipadlogout/from/doctor';
                 return;
@@ -456,6 +483,7 @@ const CREDS = { /* per-user */ };
                 const wantHost = intentHostKey(intent);
                 if (wantHost && hereHost !== wantHost) {
                     status(`Wrong host — switching to ${lf.name}…`, 'red', true);
+                    apiSet('running', `Wrong host — switching to ${lf.name}…`);
                     location.href = buildEntryUrl(intent);
                     return;
                 }
@@ -467,11 +495,13 @@ const CREDS = { /* per-user */ };
                     // there (Zoho navigated straight to it), DON'T re-navigate — the
                     // URL still carries lfSale and would reload-loop.
                     status('Checking orders — opening order status…');
+                    apiSet('done', 'Logged in — opening order status page');
                     if (location.pathname.indexOf('/poeerx/providerrxstatusbk') === -1) {
                         location.href = '/application_main_zfw/poeerx/providerrxstatusbk';
                     }
                 } else {
                     status('Logged in — starting patient flow…');
+                    apiSet('done', 'Logged in — starting patient flow');
                     gotoPatientList();
                 }
             }
@@ -484,33 +514,39 @@ const CREDS = { /* per-user */ };
             if (cur && cur !== lf.pharmacy) {
                 // On the WRONG pharmacy's login form — bounce to the right portal.
                 status(`On ${cur} login — switching to ${lf.name}…`, 'red', true);
+                apiSet('running', `On ${cur} login — switching to ${lf.name}…`);
                 location.href = buildEntryUrl(intent);
                 return;
             }
             if (getAttempts() >= 3) {
                 status('Session handling stuck — please finish login manually', 'red', true);
+                apiSet('error', 'Session handling stuck — please finish login manually');
                 return;
             }
             bumpAttempts();
             const creds = CREDS[lf.pharmacy];
             if (!creds || !creds.username || !creds.password) {
                 status(`No credentials for ${lf.name} — log in manually`, 'red', true);
+                apiSet('error', `No credentials for ${lf.name} — log in manually`);
                 return;
             }
             status(`Logging in to ${lf.name}…`);
             const loginOk = await doLogin(creds);
             if (!loginOk) {
                 status('⚠ Credentials kept resetting — log in manually (or re-run)', 'red', true);
+                apiSet('error', 'Credentials kept resetting — log in manually (or re-run)');
                 return;
             }
             const loggedIn = await waitForLogoutOfLogin();
             if (!loggedIn) {
                 status('⚠ Login submitted but did not complete — log in manually', 'red', true);
+                apiSet('error', 'Login submitted but did not complete — log in manually');
                 return;
             }
             setDone();
             resetAttempts();
             status(isOrderCheck(intent) ? 'Logged in — opening order status…' : 'Logged in — starting patient flow…');
+            apiSet('done', isOrderCheck(intent) ? 'Logged in — opening order status…' : 'Logged in — starting patient flow…');
             gotoDestination(intent);
             return;
         }
@@ -518,6 +554,78 @@ const CREDS = { /* per-user */ };
         // 4) Did not settle (transient blank / popup-check page) — stay passive; it
         //    redirects on its own and this handler re-runs on the next page.
     }
+
+    // ========================================
+    // R18 SCRIPT API — trigger dispatcher (agent entry point)
+    // ========================================
+    // Inline login+route when the API trigger fires while already on a portal page.
+    // If we're NOT on a portal page, trigger() navigates to the pharmacy login URL
+    // with the intent and drive() takes over from parseIntent on the next load.
+    async function triggerLoginFlow(intent) {
+        const lf = intent._lf;
+        const creds = CREDS[lf.pharmacy];
+        if (!creds || !creds.username || !creds.password) {
+            apiSet('error', `No credentials for ${lf.name || lf.pharmacy} — log in manually`);
+            return;
+        }
+        if (!isLoginFormPresent()) {
+            // Not on the login page — bounce to it with the intent; drive() resumes.
+            apiSet('running', `Navigating to ${lf.name || lf.pharmacy} login…`);
+            location.href = buildEntryUrl(intent);
+            return;
+        }
+        if (getAttempts() >= 3) {
+            apiSet('error', 'Session handling stuck — please finish login manually');
+            return;
+        }
+        bumpAttempts();
+        status(`Logging in to ${lf.name || lf.pharmacy}…`);
+        const loginOk = await doLogin(creds);
+        if (!loginOk) {
+            apiSet('error', 'Credentials kept resetting — log in manually (or re-run)');
+            return;
+        }
+        const loggedIn = await waitForLogoutOfLogin();
+        if (!loggedIn) {
+            apiSet('error', 'Login submitted but did not complete — log in manually');
+            return;
+        }
+        setDone();
+        resetAttempts();
+        apiSet('done', isOrderCheck(intent) ? 'Logged in — opening order status…' : 'Logged in — starting patient flow…');
+        gotoDestination(intent);
+    }
+
+    api.trigger = function (action, params) {
+        if (action === 'login') {
+            if (api.state === 'running') return { ok: false, error: 'already running' };
+            const pharmacy = params && params.pharmacy;
+            const portalUrl = pharmacy ? PHARMACY_URL_MAP[pharmacy] : null;
+            if (!portalUrl) {
+                return { ok: false, error: `unknown pharmacy: ${pharmacy} (expected one of ${PHARMACY_KEYS.join(', ')})` };
+            }
+            const step = (params && params.step) || 'sale';
+            const intent = {
+                _lf: { pharmacy, step, portalUrl, loginUrl: portalUrl, name: pharmacy }
+            };
+            persistSessionIntent(intent);
+            apiSet('running', `Triggered login — ${pharmacy} (${step})`);
+            // Already on a portal page? Drive the login inline (it may navigate and
+            // unload this page — drive() takes over on the next load).
+            if ((location.hostname || '').indexOf('pharmalink.example') !== -1) {
+                triggerLoginFlow(intent);
+            } else {
+                status(`Opening ${pharmacy} portal…`);
+                location.href = buildUrlWithIntent(portalUrl, intent);
+            }
+            return { ok: true };
+        }
+        if (action === 'reset') {
+            apiSet('idle', 'Reset — cleared to idle');
+            return { ok: true };
+        }
+        return { ok: false, error: `unknown action: ${action}` };
+    };
 
     // ========================================
     // INIT

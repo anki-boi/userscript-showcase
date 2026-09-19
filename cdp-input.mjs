@@ -23,7 +23,7 @@ if (!urlSub || !action) {
   process.exit(1);
 }
 
-const VK = { ENTER: 13, TAB: 9, ESCAPE: 27, HOME: 36, END: 35, UP: 38, DOWN: 40, LEFT: 37, RIGHT: 39, F: 70, G: 71, A: 65, C: 67, V: 86, BACKSPACE: 8, DELETE: 46, PAGEDOWN: 34, PAGEUP: 33 };
+const VK = { ENTER: 13, TAB: 9, ESCAPE: 27, HOME: 36, END: 35, UP: 38, DOWN: 40, LEFT: 37, RIGHT: 39, F: 70, G: 71, A: 65, C: 67, V: 86, B: 66, D: 68, N: 78, I: 73, L: 76, O: 79, P: 80, S: 83, U: 85, BACKSPACE: 8, DELETE: 46, PAGEDOWN: 34, PAGEUP: 33, F2: 113, SPACE: 32 };
 const MOD = { ctrl: 2, shift: 4, alt: 1, meta: 8 };
 
 const tabs = await (await fetch('http://localhost:9222/json/list')).json();
@@ -49,6 +49,8 @@ async function keyPress(key, modifiers = 0) {
   const code = VK[key.toUpperCase()];
   if (!code) { console.error(`unknown key: ${key}`); process.exit(1); }
   const base = { modifiers, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code };
+  // Space needs its text payload for Sheets to treat it as a real key (row/col select)
+  if (key.toUpperCase() === 'SPACE') base.text = ' ';
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
   await sleep(120);
@@ -93,6 +95,17 @@ try {
     await nav(args[0], parseInt(args[1] || '1', 10));
   } else if (action === 'click') {
     await clickSel(args[0]);
+  } else if (action === 'cellclick') {
+    // coordinate click: usage `cellclick <x> <y> [--ctrl|--shift]`
+    const x = parseFloat(args[0]); const y = parseFloat(args[1]);
+    const modArg = args[2] || '';
+    let modifiers = 0;
+    if (modArg === '--ctrl') modifiers = 2;
+    else if (modArg === '--shift') modifiers = 4;
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers });
+    await sleep(350);
   } else {
     console.error(`unknown action: ${action}`);
     process.exit(1);

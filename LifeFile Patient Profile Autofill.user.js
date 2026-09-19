@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LifeFile Patient Profile Autofill
 // @namespace    http://tampermonkey.net/
-// @version      1.12
+// @version      1.13
 // @description  Fills the LifeFile new-patient form from Copy Everything; glows missing fields
 // @author       Jeyson Dagondon
 // @run-at       document-idle
@@ -14,11 +14,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Profile v1.12] boot');
+console.info('[LF-Profile v1.13] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['LF-Profile'] = { name: 'LifeFile Patient Profile Autofill', version: '1.12', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['LF-Profile'] = { name: 'LifeFile Patient Profile Autofill', version: '1.13', state: 'idle', message: 'Loaded', progress: null, output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -31,6 +31,18 @@ window.__scripts['LF-Profile'] = { name: 'LifeFile Patient Profile Autofill', ve
 
 (function() {
     'use strict';
+
+    // --- Script API (R18): reference the registered object + state helper ---
+    const api = window.__scripts['LF-Profile'];
+    function apiSet(state, message, extra) {
+        api.state = state;
+        api.message = message || '';
+        api.lastActivity = Date.now();
+        if (extra) Object.assign(api, extra);
+        if (state === 'error') api.error = message || '';
+        if (state === 'done' || state === 'idle') { api.error = null; }
+        console.info(`[LF-Profile] API: ${state}${message ? ' — ' + message : ''}`);
+    }
 
     // ========================================
     // FIELD MAP  (payload key → form target)
@@ -265,6 +277,7 @@ function fillForm(payload, btn) {
         } catch (e) {
             console.error('[injector] clipboard read failed:', e);
             flashButton(btn, '✕ Clipboard blocked', 'var(--ds-danger,#b3261e)');
+            apiSet('error', 'Clipboard read blocked — grant clipboard permission');
             return;
         }
 
@@ -274,11 +287,13 @@ function fillForm(payload, btn) {
         } catch (e) {
             console.error('[injector] clipboard is not valid JSON:', e);
             flashButton(btn, '✕ No valid data', 'var(--ds-danger,#b3261e)');
+            apiSet('error', 'Clipboard is not valid JSON');
             return;
         }
 
         if (!payload || typeof payload !== 'object') {
             flashButton(btn, '✕ Bad payload', 'var(--ds-danger,#b3261e)');
+            apiSet('error', 'Bad clipboard payload');
             return;
         }
 
@@ -286,7 +301,9 @@ function fillForm(payload, btn) {
         // _lifeFileProfile (keeps the rich patient payload untouched).
         if (payload._lifeFileProfile) payload = payload._lifeFileProfile;
 
+        apiSet('running', `Filling patient form — ${payload.firstName || ''} ${payload.lastName || ''}`);
         fillForm(payload, btn);
+        apiSet('done', `Patient form filled — ${payload.firstName || ''} ${payload.lastName || ''}`);
     }
 
     // Flash feedback on the button. Restores to '' so the bg_forward class styling
@@ -382,13 +399,55 @@ function fillForm(payload, btn) {
         if (!intent.firstName || !intent.lastName) return;
         if (!document.querySelector('a.btn_insert_patient')) {
             // New-patient form not rendered yet — retry shortly.
+            apiSet('waiting_human', 'Sale intent present — waiting for the new-patient form to render');
             setTimeout(autoFillFromIntent, 700);
             return;
         }
         const btn = document.getElementById(BTN_ID) || document.createElement('a');
+        apiSet('running', `Auto-filling patient form — ${intent.firstName} ${intent.lastName}`);
         fillForm(intent, btn);
         console.log('[injector] auto-filled from LifeFile sale intent');
+        apiSet('done', `Patient form filled — ${intent.firstName} ${intent.lastName}`);
     }
+
+    // ========================================
+    // R18 SCRIPT API — trigger dispatcher (agent entry point)
+    // ========================================
+    api.trigger = function (action, params) {
+        if (action === 'start') {
+            if (api.state === 'running') return { ok: false, error: 'already running' };
+            const raw = params && params.intent;
+            if (!raw || typeof raw !== 'object') return { ok: false, error: 'params.intent is required' };
+            let j = null;
+            try { j = JSON.stringify(raw); } catch (e) { return { ok: false, error: 'intent is not JSON-serializable' }; }
+            try {
+                sessionStorage.setItem('lf_sale_intent', j);
+                localStorage.setItem('lf_sale_intent', j);
+            } catch (e) { return { ok: false, error: 'could not persist intent to storage' }; }
+            // Unwrap the flat LifeFile block the way the existing readers do.
+            const payload = raw._lifeFileProfile ? raw._lifeFileProfile : raw;
+            if (!payload.firstName || !payload.lastName) {
+                apiSet('waiting_human', 'Intent persisted — no patient name in payload');
+                return { ok: true };
+            }
+            if (!document.querySelector('a.btn_insert_patient')) {
+                // New-patient form not on this page — the navigation will land there
+                // and autoFillFromIntent picks the intent up.
+                apiSet('waiting_human', 'Intent persisted — new-patient form not on this page');
+                return { ok: true };
+            }
+            const btn = document.getElementById(BTN_ID) || document.createElement('a');
+            apiSet('running', `Filling patient form — ${payload.firstName} ${payload.lastName}`);
+            fillForm(payload, btn);
+            apiSet('done', `Patient form filled — ${payload.firstName} ${payload.lastName}`);
+            return { ok: true };
+        }
+        if (action === 'reset') {
+            apiSet('idle', 'Reset — cleared to idle');
+            return { ok: true };
+        }
+        return { ok: false, error: `unknown action: ${action}` };
+    };
 
     // ========================================
     // INIT

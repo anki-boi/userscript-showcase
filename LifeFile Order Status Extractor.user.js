@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LifeFile Order Status Extractor
 // @namespace    jeyson
-// @version      1.13
+// @version      1.14
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @match        *://*/application_main_zfw/poeerx/providerrxstatusbk*
@@ -11,11 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Status v1.13] boot');
+console.info('[LF-Status v1.14] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['LF-Status'] = { name: 'LifeFile Order Status Extractor', version: '1.13', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['LF-Status'] = { name: 'LifeFile Order Status Extractor', version: '1.14', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -308,7 +308,7 @@ window.__scripts['LF-Status'] = { name: 'LifeFile Order Status Extractor', versi
         const pad = n => String(n).padStart(2, '0');
         const fromEl = document.getElementById('txt_created_from');
         const toEl = document.getElementById('txt_created_to');
-        if (fromEl) fromEl.value = '01/01/' + now.getFullYear();
+        if (fromEl) fromEl.value = '01/01/' + (now.getFullYear() - 1);
         if (toEl) toEl.value = pad(now.getMonth() + 1) + '/' + pad(now.getDate()) + '/' + now.getFullYear();
 
         try { sessionStorage.setItem('lf_orders_searched', '1'); } catch(e) { console.warn('[LF-Status]', e); }

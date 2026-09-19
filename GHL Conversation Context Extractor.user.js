@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GHL Conversation Context Extractor
 // @namespace    https://github.com/anki-boi/userscript-showcase
-// @version      1.8.16
+// @version      1.8.17
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  One-click GHL conversation extractor (SMS/calls/transcripts/emails) to XML/JSON
@@ -17,13 +17,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[GHL-Ctx v1.8.16] boot');
+console.info('[GHL-Ctx v1.8.17] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['GHL'] = {
   name: 'GHL Conversation Context Extractor',
-  version: '1.8.16',
+  version: '1.8.17',
   state: 'idle',
   message: '',
   progress: null,
@@ -180,6 +180,19 @@ window.__scripts['GHL'] = {
         .gx-menu-label { font-weight: 500; }
         .gx-menu-value { color: #666; font-size: 12px; }
 
+        /* Depth submenu — expands in place inside the settings menu. The menu is
+           re-clamped (positionSettingsMenu) when it opens, so the extra height can
+           never push the menu off the bottom of the viewport. */
+        #gx-depth-menu {
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            padding-left: 8px;
+            margin-left: 4px;
+            border-left: 2px solid var(--ds-border,#e8e2d8);
+        }
+        #gx-depth-menu.visible { display: flex; }
+
         #gx-toast {
             position: absolute;
             bottom: calc(100% + 8px);
@@ -266,6 +279,66 @@ window.__scripts['GHL'] = {
         closeMenu();
     };
     settingsMenu.appendChild(filesItem);
+
+    // ── Depth Selector (v1.8.17) ──────────────────────────────────────────────
+    // Deliberately NOT stored in GM_* and deliberately given NO default: a
+    // remembered depth silently shortens a later export, which is the exact failure
+    // this picker exists to remove. Each run must be handed an explicit window, and
+    // the choice is consumed by that run (see runExtraction).
+    let runDepth = null;
+
+    const depthItem = document.createElement('div');
+    depthItem.className = 'gx-menu-item';
+    depthItem.innerHTML = `
+        <span class="gx-menu-label">Depth</span>
+        <span class="gx-menu-value" id="gx-display-depth">Choose…</span>
+    `;
+
+    const depthSubmenu = document.createElement('div');
+    depthSubmenu.id = 'gx-depth-menu';
+
+    const DEPTH_CHOICES = [
+        { mode: 'days', value: 7, label: 'Last 7 days' },
+        { mode: 'days', value: 3, label: 'Last 3 days' },
+        { mode: 'custom',         label: 'Custom date…' },
+        { mode: 'full',           label: 'Full history' }
+    ];
+
+    function setDepth(choice) {
+        runDepth = choice;
+        const display = document.getElementById('gx-display-depth');
+        if (display) display.textContent = choice.label;
+        closeMenu();
+        showToast(`Depth: ${choice.label} — click 📋 to extract`, 'success', 3000);
+    }
+
+    DEPTH_CHOICES.forEach(choice => {
+        const row = document.createElement('div');
+        row.className = 'gx-menu-item';
+        row.innerHTML = `<span class="gx-menu-label">${choice.label}</span>`;
+        row.onclick = (e) => {
+            e.stopPropagation();
+            if (choice.mode !== 'custom') { setDepth(choice); return; }
+            const input = prompt('Extract back to (YYYY-MM-DD):', isoDay(new Date()));
+            if (input === null) return;
+            const bound = resolveDepthBound('date', input.trim());
+            if (!bound) { showToast('✗ Not a valid date: ' + input, 'error', 4000); return; }
+            setDepth({ mode: 'date', value: isoDay(bound), label: 'Since ' + isoDay(bound) });
+        };
+        depthSubmenu.appendChild(row);
+    });
+
+    depthItem.onclick = (e) => {
+        e.stopPropagation();
+        // The right-click menu auto-closes after 4s; a depth choice takes longer
+        // than that, so stop the clock while the submenu is open.
+        clearTimeout(menuTimeout);
+        depthSubmenu.classList.toggle('visible');
+        positionSettingsMenu();
+    };
+
+    settingsMenu.appendChild(depthItem);
+    settingsMenu.appendChild(depthSubmenu);
 
     container.appendChild(settingsMenu);
 
@@ -431,6 +504,7 @@ window.__scripts['GHL'] = {
 
     function closeMenu() {
         settingsMenu.classList.remove('visible');
+        depthSubmenu.classList.remove('visible');
     }
 
     window.addEventListener('resize', () => {
@@ -492,6 +566,124 @@ window.__scripts['GHL'] = {
 
     function clean(str) {
         return (str || '').replace(/\s+/g, ' ').trim();
+    }
+
+    // ─── DATE PARSING (ported from the extension's content.js) ────────────────────
+    //
+    // The depth bound has to know how old the oldest mounted day chip is, and GHL
+    // renders those chips as TEXT: "Today", "Yesterday", "Mon, Aug 3, 2026 · 12",
+    // "8/3/26". This script had no chip-text -> Date parser at all before v1.8.17
+    // (it only ever collected the raw strings for the <day_marker> tags), so the
+    // bound cannot exist without it. ONE parser: the depth rule and every date we
+    // report come through parseConversationDateLabel.
+    const MONTHS = Object.freeze({
+        jan: 1, january: 1,
+        feb: 2, february: 2,
+        mar: 3, march: 3,
+        apr: 4, april: 4,
+        may: 5,
+        jun: 6, june: 6,
+        jul: 7, july: 7,
+        aug: 8, august: 8,
+        sep: 9, sept: 9, september: 9,
+        oct: 10, october: 10,
+        nov: 11, november: 11,
+        dec: 12, december: 12
+    });
+
+    function normalizeYear(year) {
+        if (!year) return new Date().getFullYear();
+        const numeric = Number(year);
+        return numeric < 100 ? 2000 + numeric : numeric;
+    }
+
+    function validDateParts(year, month, day) {
+        const date = new Date(year, month - 1, day);
+        return date.getFullYear() === year &&
+            date.getMonth() === month - 1 &&
+            date.getDate() === day;
+    }
+
+    // A mounted day chip -> Date, or null when it is not a date we understand.
+    // Note the deliberate omission: an unqualified month+day ("Aug 3") resolves to
+    // the CURRENT year, never a past one. A chip is the day of a message that is
+    // already on screen, so this only ever mis-year-degrades a chip dated more than
+    // a year back — and that errs by making the bound look NOT yet reached, i.e. it
+    // loads more, never less. Truncation is the failure mode worth avoiding.
+    function parseConversationDateLabel(label) {
+        const text = clean(label).toLowerCase();
+        if (!text) return null;
+
+        const now = new Date();
+
+        if (text === 'today') {
+            return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        }
+
+        if (text === 'yesterday') {
+            const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            date.setDate(date.getDate() - 1);
+            return date;
+        }
+
+        const normalized = text
+            .replace(/\b(mon|tue|wed|thu|fri|sat|sun)(day)?\b,?/gi, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        let match = normalized.match(
+            /\b(january|february|march|april|may|june|july|august|september|sept|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i
+        );
+
+        if (match) {
+            const month = MONTHS[match[1].toLowerCase()];
+            const day = Number(match[2]);
+            const year = match[3] ? Number(match[3]) : now.getFullYear();
+            return validDateParts(year, month, day)
+                ? new Date(year, month - 1, day)
+                : null;
+        }
+
+        match = normalized.match(
+            /\b(0?[1-9]|1[0-2])[\/.-](0?[1-9]|[12]\d|3[01])(?:[\/.-](\d{2}|\d{4}))?\b/
+        );
+
+        if (match) {
+            const month = Number(match[1]);
+            const day = Number(match[2]);
+            const year = match[3] ? normalizeYear(match[3]) : now.getFullYear();
+            return validDateParts(year, month, day)
+                ? new Date(year, month - 1, day)
+                : null;
+        }
+
+        return null;
+    }
+
+    /** ISO yyyy-mm-dd in LOCAL time — GHL day chips are local days, so a UTC
+     *  midnight would shave hours off the window. */
+    function isoDay(value) {
+        if (!value) return null;
+        const d = value instanceof Date ? value : new Date(value);
+        if (isNaN(d)) return null;
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    // Depth mode -> the instant the load may stop at. LOCAL midnight, for the same
+    // reason isoDay is local. 'full' (and anything unrecognised) returns null.
+    function resolveDepthBound(mode, value, now = new Date()) {
+        if (mode === 'days') {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return null;
+            return new Date(now.getFullYear(), now.getMonth(), now.getDate() - n);
+        }
+        if (mode === 'date') {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+            if (!m) return null;
+            const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+            return validDateParts(year, month, day) ? new Date(year, month - 1, day) : null;
+        }
+        return null;
     }
 
     // Full email body from a mail card: v2 renders most bodies inside an
@@ -559,6 +751,24 @@ window.__scripts['GHL'] = {
             '.loading, .spinner, [class*="loading" i], [class*="skeleton" i], ' +
             '[role="progressbar"], svg.animate-spin, .animate-spin'
         );
+    }
+
+    // The oldest date the thread has actually scrolled back to, in ms, or null when
+    // no mounted day chip parses. Reads the SAME chips the harvest collects into
+    // dateChips — one selector, one parser, so "how far back did we get" means the
+    // same thing to the stop rule and to the report.
+    function oldestDatedChipMs(parseDate) {
+        if (typeof parseDate !== 'function') return null;
+        let oldest = null;
+        document.querySelectorAll('[id^="date-label-"]').forEach(chip => {
+            const wrap = chip.querySelector('.hr-tag__count-wrapper');
+            const parsed = parseDate(clean(wrap ? wrap.textContent : chip.textContent));
+            if (!parsed) return;
+            const ms = parsed instanceof Date ? parsed.getTime() : NaN;
+            if (isNaN(ms)) return;
+            if (oldest === null || ms < oldest) oldest = ms;
+        });
+        return oldest;
     }
 
     // ─── VIRTUALIZER INDEX HELPERS ───────────────────────────────────────────────────
@@ -725,9 +935,30 @@ window.__scripts['GHL'] = {
         return 0;
     }
 
-    async function loadEntireHistory(sc, onProgress, onHarvestStep) {
+    // `depth` is { boundMs, parseDate, minRounds, graceRounds } or null for a full
+    // load. The bound is a STOP RULE, not a filter: it short-circuits the load once
+    // the thread has scrolled back past the chosen window, and everything still
+    // mounted is harvested exactly as before. Deeper is never a behaviour change;
+    // shallower changes what gets exported, so the caller must announce the window.
+    //
+    // There is no `onHarvestStep` third parameter any more. It was passed
+    // `settleAndHarvest` by both call sites and NEVER CALLED, while the comment
+    // further down claimed the harvest rode along with every scroll position. It
+    // does not, and it must not: a merged walk re-triggers newer-batch loads below
+    // the spacer, growth never stops, and the page bounces forever (v1.8.11 flake).
+    // The harvest is STEP 2 in harvestWholeThread().
+    async function loadEntireHistory(sc, onPharmacyB, depth) {
         const messageCount = () =>
             document.querySelectorAll('.message-item[data-message-id]').length;
+
+        // Depth bound. minRounds stops a thread whose FIRST mounted window is
+        // already older than the bound from leaving before a single batch fetch has
+        // been triggered; graceRounds absorbs an undated entry sitting between two
+        // dated ones. Both are calibration knobs for a real thread, not constants.
+        const boundMs = depth && Number.isFinite(depth.boundMs) ? depth.boundMs : null;
+        const minRounds = depth && Number.isFinite(depth.minRounds) ? depth.minRounds : 3;
+        const graceRounds = depth && Number.isFinite(depth.graceRounds) ? depth.graceRounds : 2;
+        let belowBoundRounds = 0;
 
         let rounds = 0;
         let lastSh = sc.scrollHeight;
@@ -769,7 +1000,7 @@ window.__scripts['GHL'] = {
             if (grew) lastGrowthAt = Date.now();
 
             rounds++;
-            if (onProgress) onProgress(messageCount(), rounds);
+            if (onPharmacyB) onPharmacyB(messageCount(), rounds);
 
             // Time-based idle break: only stop after LOAD_IDLE_BREAK_MS of
             // continuous no-growth. Round-count budgets race with batch gaps
@@ -780,12 +1011,35 @@ window.__scripts['GHL'] = {
             if (Date.now() - lastGrowthAt >= LOAD_IDLE_BREAK_MS) {
                 break;
             }
+
+            // ── DEPTH BOUND (the fast exit) ────────────────────────────────────
+            // Evaluated once per round, after the growth check, so it can never
+            // pre-empt the idle logic on an undated thread.
+            if (boundMs !== null) {
+                const oldest = oldestDatedChipMs(depth && depth.parseDate);
+                if (oldest !== null && oldest < boundMs) {
+                    belowBoundRounds += 1;
+                    if (belowBoundRounds >= graceRounds && rounds >= minRounds) break;
+                } else {
+                    belowBoundRounds = 0;
+                }
+            }
         }
 
-        return { rounds, finalCount: messageCount() };
+        return {
+            rounds,
+            finalCount: messageCount(),
+            stopped: shouldStop,
+            depthRequestedMs: boundMs,
+            oldestReachedMs: depth ? oldestDatedChipMs(depth.parseDate) : null
+        };
     }
 
-    async function harvestWholeThread() {
+    // `options.depth` is the resolveDepthBound window ({ boundMs, parseDate } or just
+    // { boundMs, parseDate, minRounds, graceRounds }); null/undefined = full history.
+    // Returns the old shape plus timing, so a run can be measured instead of guessed.
+    async function harvestWholeThread(options) {
+        const opts = options || {};
         const sc = getScrollContainer();
         if (!sc) return { container: false, messages: 0, entries: [], transcriptsOpened: 0 };
 
@@ -842,22 +1096,28 @@ window.__scripts['GHL'] = {
         // unmounts items outside the viewport, so harvest must happen while
         // scrolling. Each round walks top→bottom (harvesting), then returns to
         // top (which triggers the older-batch load); repeats until growth stops.
-        if (typeof harvestWholeThread._onLoadProgress === 'function') {
-            await loadEntireHistory(sc, harvestWholeThread._onLoadProgress, settleAndHarvest);
-        } else {
-            await loadEntireHistory(sc, null, settleAndHarvest);
-        }
+        // ── STEP 1: LOAD PHASE (scrolls to materialize history; harvests nothing) ──
+        // The two phases are timed SEPARATELY on purpose. Starting the harvest clock
+        // before the load (or at the top of this function) would make harvest.ms
+        // include the load and report the whole run twice.
+        const loadStart = Date.now();
+        const loadStats = await loadEntireHistory(
+            sc, harvestWholeThread._onLoadPharmacyB || null, opts.depth || null
+        );
+        const loadMs = Date.now() - loadStart;
+        const harvestStart = Date.now();
 
         await sleep(300);
         await settleAndHarvest();
 
         // ── STEP 2: HARVEST PHASE ──
         const step = Math.max(240, Math.floor(sc.clientHeight * 0.8));
-        let pos = 0, guard = 0, lastHeight = -1, stableHeight = 0;
+        let pos = 0, guard = 0, lastHeight = -1, stableHeight = 0, steps = 0;
         const MAX_STEPS = 600;
 
         while (guard < MAX_STEPS) {
             if (shouldStop) break;
+            steps++;
             pos += step;
             if (pos > sc.scrollHeight) pos = sc.scrollHeight;
             sc.scrollTop = pos;
@@ -893,7 +1153,51 @@ window.__scripts['GHL'] = {
             .sort((a, b) => a.idx - b.idx)
             .map(m => ({ data: m.data, date: dateFor(m.idx) }));
 
-        return { container: true, messages: entries.length, entries, transcriptsOpened };
+        const transcriptLines = entries.reduce((n, e) => {
+            const t = e.data && e.data.type === 'call' && e.data.fields && e.data.fields.transcript;
+            return n + (t ? t.length : 0);
+        }, 0);
+
+        // How far back the WHOLE run actually got, taken from the date chips the
+        // harvest itself collected (harvestVisible fills `dateChips` from every window
+        // the walk ever mounted) rather than by re-reading the DOM here. Two reasons,
+        // both found by running the real flow:
+        //   1. STEP 2 scrolls, and scrolling mounts older batches, so the walk reaches
+        //      DEEPER than the load alone did. Reporting the load-phase value claimed a
+        //      window the run then exceeded.
+        //   2. The DOM at this point is NOT representative: the walk ends near the
+        //      bottom, and the virtualizer has unmounted the old windows by then, so a
+        //      re-query returned null and the report said "oldest chip seen unknown" —
+        //      on the one run where knowing how far back you got matters most. It also
+        //      cannot report anything at all without a bound, because loadEntireHistory
+        //      only parses chips through the depth object it was handed.
+        const oldestReachedMs = (() => {
+            let oldest = null;
+            for (const txt of dateChips.values()) {
+                const parsed = parseConversationDateLabel(txt);
+                if (!parsed) continue;
+                const ms = parsed.getTime();
+                if (oldest === null || ms < oldest) oldest = ms;
+            }
+            return oldest;
+        })();
+
+        return {
+            container: true,
+            messages: entries.length,
+            entries,
+            transcriptsOpened,
+            transcriptLines,
+            oldestReachedMs,
+            load: {
+                rounds: loadStats.rounds,
+                messages: loadStats.finalCount,
+                ms: loadMs,
+                stopped: loadStats.stopped,
+                depthRequestedMs: loadStats.depthRequestedMs
+            },
+            harvest: { ms: Date.now() - harvestStart, steps }
+        };
     }
 
     function extractTranscriptLines(item) {
@@ -1183,7 +1487,7 @@ window.__scripts['GHL'] = {
         return { fileName, ok: true };
     }
 
-    async function downloadAllDocuments(onProgress) {
+    async function downloadAllDocuments(onPharmacyB) {
         const opened = await ensureDocumentsPanelOpen();
         if (!opened) return { opened: false, total: 0, downloaded: 0, failed: [] };
 
@@ -1199,7 +1503,7 @@ window.__scripts['GHL'] = {
             if (shouldStop) break;
             const result = await downloadFileRow(row);
             if (result.ok) downloaded++; else failed.push(`${result.fileName} (${result.reason})`);
-            if (onProgress) onProgress(downloaded + failed.length, rows.length);
+            if (onPharmacyB) onPharmacyB(downloaded + failed.length, rows.length);
         }
 
         return { opened: true, total: rows.length, downloaded, failed };
@@ -1231,11 +1535,17 @@ window.__scripts['GHL'] = {
         return `${indent}<${tag}>${escapeXml(val)}</${tag}>\n`;
     }
 
-    function buildXml(contactName, entries) {
+    // `meta` is optional (older 2-arg calls still work). No default parameter on
+    // purpose: the test harness's sliceDecl brace-matches from the first `{` it sees,
+    // and a `meta = {}` default puts that brace in the signature.
+    function buildXml(contactName, entries, meta) {
+        const m = meta || {};
         let xml = `<ghl_conversation>\n`;
         xml += `  <contact>${escapeXml(contactName)}</contact>\n`;
         xml += `  <extracted_at>${escapeXml(new Date().toISOString())}</extracted_at>\n`;
         xml += `  <message_count>${entries.length}</message_count>\n`;
+        xml += `  <depth_requested>${escapeXml(m.depthRequested || 'full')}</depth_requested>\n`;
+        xml += `  <oldest_reached>${escapeXml(m.oldestReached || '')}</oldest_reached>\n`;
         xml += `  <thread>\n`;
 
         let lastDate = null;
@@ -1304,11 +1614,16 @@ window.__scripts['GHL'] = {
         return xml;
     }
 
-    function buildJsonOutput(contactName, entries) {
+    function buildJsonOutput(contactName, entries, meta) {
+        const m = meta || {};
         return JSON.stringify({
             contact: contactName,
             extracted_at: new Date().toISOString(),
             message_count: entries.length,
+            // The requested window and the oldest day chip actually seen. A short
+            // export is then self-explaining instead of looking like a short thread.
+            depth_requested: m.depthRequested || 'full',
+            oldest_reached: m.oldestReached || null,
             // FIX BUG 1: Spread fields first, then override with wrapper date/type
             thread: entries.map(({ data, date }) => ({
                 ...data.fields,
@@ -1325,22 +1640,38 @@ window.__scripts['GHL'] = {
 
     async function runExtraction() {
         if (isRunning) return;
+
+        // No window chosen -> no run. An unannounced bound is indistinguishable from
+        // a silent truncation, so the choice is mandatory and per-run.
+        if (!runDepth) {
+            showMenu();
+            showToast('⚠ Choose a depth first → menu → Depth', 'error', 5000);
+            return;
+        }
+        const depthBound = resolveDepthBound(runDepth.mode, runDepth.value);
+        const depth = depthBound
+            ? { boundMs: depthBound.getTime(), parseDate: parseConversationDateLabel }
+            : null;
+
         isRunning = true;
         shouldStop = false;
         const api = window.__scripts['GHL'];
-        api.state = 'running'; api.message = 'Extracting conversation...'; api.output = null; api.error = null; api.lastActivity = Date.now();
+        api.state = 'running'; api.message = 'Extracting conversation...'; api.output = null; api.error = null; api.progress = null; api.lastActivity = Date.now();
         toggle.classList.add('gx-working');
         toggle.innerHTML = '<span class="gx-toggle-emoji">⏹</span><span class="gx-toggle-label">Stop</span>';
         toggle.title = 'Click to stop extraction';
         closeMenu();
 
         try {
-            showToast('Loading full thread...', 'success', 60000);
-            harvestWholeThread._onLoadProgress = (count, rounds) => {
-                showToast(`Loading history… ${count} messages so far`, 'success', 120000);
+            // Name the resolved window BEFORE the run: a bounded load nobody
+            // announced is exactly the silent truncation this picker exists to stop.
+            const windowText = depth ? `back to ${isoDay(depthBound)} (${runDepth.label})` : 'full history';
+            showToast(`Loading ${windowText}…`, 'success', 60000);
+            harvestWholeThread._onLoadPharmacyB = (count, rounds) => {
+                api.progress = { phase: 'load', messages: count, rounds };
+                showToast(`Loading ${windowText}… ${count} messages so far`, 'success', 120000);
             };
-            showToast('Loading older messages…', 'success', 120000);
-            const result = await harvestWholeThread();
+            const result = await harvestWholeThread({ depth });
 
             if (shouldStop) {
                 showToast('⏹ Extraction stopped during loading', 'error', 5000);
@@ -1349,7 +1680,12 @@ window.__scripts['GHL'] = {
             }
 
             if (!result.container) {
+                // The R18 state used to stay 'running' forever here, so the API lied
+                // about a run that had already given up. Report it instead.
                 showToast('⚠ Could not find the conversation scroll area', 'error', 6000);
+                api.state = 'idle';
+                api.message = 'No conversation scroll area (thread may not overflow its panel)';
+                api.lastActivity = Date.now();
                 return;
             }
 
@@ -1357,16 +1693,24 @@ window.__scripts['GHL'] = {
             const entries = result.entries;
             const contactName = getContactName();
 
+            // What the run actually walked, recorded on the export itself so a short
+            // file can be told apart from a short conversation.
+            const meta = {
+                depthRequested: isoDay(result.load.depthRequestedMs) || 'full',
+                oldestReached: isoDay(result.oldestReachedMs),
+                depthLabel: runDepth.label
+            };
+
             let content;
             let mimeType;
             let extension;
 
             if (CONFIG.format === 'json') {
-                content = buildJsonOutput(contactName, entries);
+                content = buildJsonOutput(contactName, entries, meta);
                 mimeType = 'application/json';
                 extension = 'json';
             } else {
-                content = buildXml(contactName, entries);
+                content = buildXml(contactName, entries, meta);
                 mimeType = 'text/xml';
                 extension = 'xml';
             }
@@ -1451,6 +1795,28 @@ window.__scripts['GHL'] = {
                 }
             }
 
+            // Instrumentation. load.ms and harvest.ms are separate measurements —
+            // measure with these, never with a stopwatch on the outside.
+            const stats = {
+                load: {
+                    rounds: result.load.rounds,
+                    messages: result.load.finalCount,
+                    ms: result.load.ms,
+                    stopped: result.load.stopped,
+                    depthRequested: meta.depthRequested,
+                    oldestReached: meta.oldestReached
+                },
+                harvest: result.harvest,
+                entries: entries.length,
+                transcriptLines: result.transcriptLines
+            };
+            api.progress = stats;
+            diagMsg += `\n⏱ ${((result.load.ms + result.harvest.ms) / 1000).toFixed(1)}s — ` +
+                `load ${result.load.rounds}r/${(result.load.ms / 1000).toFixed(1)}s · ` +
+                `harvest ${result.harvest.steps} steps/${(result.harvest.ms / 1000).toFixed(1)}s · ` +
+                `${result.transcriptLines} transcript lines` +
+                `\n🗓 window: ${meta.depthRequested} → oldest chip seen ${meta.oldestReached || 'unknown'}`;
+
             showToast(diagMsg, 'success', 9000);
 
         } catch (err) {
@@ -1464,6 +1830,10 @@ window.__scripts['GHL'] = {
             toggle.classList.remove('gx-working');
             isRunning = false;
             shouldStop = false;
+            // Consumed by the run: the next extraction is asked for its window again.
+            runDepth = null;
+            const depthDisplay = document.getElementById('gx-display-depth');
+            if (depthDisplay) depthDisplay.textContent = 'Choose…';
         }
     }
 

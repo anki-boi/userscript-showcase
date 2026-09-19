@@ -8,6 +8,67 @@ Paste a CSV or JSON order row, confirm the column mapping, then auto-drive patie
 
 ---
 
+## v2.19
+
+Unmatched purchase items no longer kill the row + a safe name resolver (2026-09-11):
+
+- **One unknown shorthand used to abort the WHOLE row.** `stepSelectModules`
+  returned early when `parsePurchase` reported an unmapped item
+  ("Add them to PRODUCT_ALIASES and resume manually"), so the peptides that DID
+  resolve were never added either — and the questionnaire, ship date and
+  Continue gate all had to be done by hand. Jeyson: *"it really bums me out
+  that I had to fill things out manually."*
+  Now the script adds everything it can resolve, shows an amber hand-off
+  listing the leftovers, and **resumes the automation** when the human presses
+  **"Added them manually — continue"** (or `trigger('continue')`): questionnaire
+  skip/prefill, ship date and the final Continue gate stay automated. The
+  matched items already in the cart are flagged (`job.productsAdded`) so a page
+  reload during the hand-off cannot re-add them.
+- **Product-name resolver (`resolveCatalogProduct`) — a second chance before
+  handing off.** When a shorthand has no `PRODUCT_ALIASES` entry, the catalog
+  name itself is matched after ignoring the `[GRE]`/`[STK]` brand tag, case and
+  whitespace, optionally ignoring ONE trailing form word
+  (injectable/inj/capsules/solution). Verified against the live catalog +
+  Jeyson's real sheet values: `Epithalon Inj`, `BPC-157 Inj`, `BPC-157 Capsule`,
+  `MOTS-C`, `TB500`, `Tesamorelin`, `5-Amino 1MQ`, `PT-141 Inj`,
+  `Glutathione Inj`, `DSIP/BPC/CJC`, `Klow Injectable` now resolve with no alias
+  entry; `BPC-157` alone still defers to its alias.
+  **It never guesses:** a same-core ambiguity with no form word
+  (`BPC-157` vs the injectable + capsules pair), a component-only name whose
+  catalog entry is a combo (`Semax`, `Selank`, `Pinealon`, `AOD-9604`), or an
+  unknown name stays unmapped for the human. Auto-matched items are reported in
+  the panel message + console (`[PSA] auto-matched by product name ...`), never
+  silently.
+- Harness: `_smoketest/verify-psa-v20.js` gained a v2.19 section (name-resolver
+  battery incl. the synthetic same-core ambiguity contract, autoMatched
+  reporting, and source guards for the resumable hand-off) — 335 asserts.
+
+---
+
+## v2.18
+
+Hardened CSV parsing + new sheet column (2026-08-25):
+
+- **Multi-line cells no longer become fake rows.** The sheet's new
+  "Current Healing/GH peptides" column (and the "Medical Action" / "Purchase"
+  columns) contain cells with EMBEDDED NEWLINES (e.g. "8/7\n3 Tesa/Ipa").
+  Spreadsheet copies quote those cells, but the old parser split the whole
+  paste on newlines FIRST, so every embedded newline was misread as a new
+  row — one patient became several broken rows. `parseCSV` is now a
+  full-stream quote-aware tokenizer that only ends a field (delimiter) or a
+  row (newline) when OUTSIDE quotes, so multi-line cells stay intact.
+  Internal whitespace in each cell collapses to single spaces.
+- **Fixed-schema mapping updated** for the new column: "Current Healing/GH
+  peptides" inserted into `FIXED_HEADER_ORDER` (between Purchase and Existing
+  RxFlow Patient). It is informational (not mapped to a canonical field)
+  but its position keeps headerless single-row pastes aligned.
+- **Purchase parsing now splits on "&" AND a space-wrapped "+"** — the live
+  sheet mixes both ("3 Tesa/Ipa + 3 Klow", "3 Klow & 3 Tesa/Ipa"). The "+"
+  split is space-delimited (`\s+\+\s+`) so shorthands containing a plus —
+  "NAD+ Inj" — are never broken in two.
+
+---
+
 ## v2.16
 
 

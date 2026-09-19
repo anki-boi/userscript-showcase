@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cross-Platform Contact Toolkit
 // @namespace    http://tampermonkey.net/
-// @version      7.29
+// @version      7.30
 // @author       Jeyson Dagondon
 // @description  Unified toolbar: copy name+link, cross-platform search, LifeFile order check
 // @match        https://app.gohighlevel.com/*
@@ -16,17 +16,18 @@
 // @match        https://crm.zoho.jp/*
 // @match        https://portal.labx.example.com/*
 // @match        https://staff.exampleclinic.com/*
+// @match        https://portal.exampleclinic.com/*
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[Toolkit v7.29] boot');
+console.info('[Toolkit v7.30] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', version: '7.29', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', version: '7.30', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -57,6 +58,9 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
   const RC_URL = 'https://app.ringcentral.com/sms/direct/all/';
   const LABX_URL = 'https://portal.labx.example.com/Laborder/LabXLink';
   const RXFLOW_URL = 'https://staff.exampleclinic.com/patients';
+  // Patient Connect is a Zoho WebTab (WebTab5) that embeds the external app; from
+  // another platform, jump straight to that Zoho tab.
+  const PC_URL = `https://crm.zoho.com/crm/${ZOHO_ORG}/tab/WebTab5`;
 
   const host = location.hostname;
   const IS_GHL = /gohighlevel\.com$|highlevel\.com$/.test(host);
@@ -64,6 +68,7 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
   const IS_ZOHO = /crm\.zoho\./.test(host);
   const IS_LABX = host === 'portal.labx.example.com';
   const IS_RXFLOW = host === 'staff.exampleclinic.com';
+  const IS_PC = host === 'portal.exampleclinic.com';
 
   function openWithHandoff(url, name) {
     window.open(url + '#xplat=' + encodeURIComponent(cleanNameForSearch(name)), '_blank');
@@ -369,6 +374,10 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
         openWithHandoff(RC_URL, term);
       }));
     }
+    if (!IS_PC) {
+      // Jump to the Patient Connect WebTab in Zoho.
+      bar.appendChild(makeActionButton('Patient Connect', ICON_SEARCH, () => window.open(PC_URL, '_blank')));
+    }
     if (!IS_LABX) {
       bar.appendChild(makeActionButton('Labs', ICON_FLASK, () => openWithHandoff(LABX_URL, clean)));
     }
@@ -383,6 +392,10 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
      NAME DETECTION — per platform
      ============================================================ */
   function getNameEl() {
+    if (IS_PC) {
+      // Open conversation's patient name in the chat header.
+      return document.querySelector('.chat-header-info .chat-patient-name');
+    }
     if (IS_GHL) {
       // Highrise contact header
       const el = document.querySelector(
@@ -515,6 +528,15 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
       const el = document.querySelector('.patient-phone') || document.querySelector('[class*="phone"]');
       return el ? el.textContent.trim() : null;
     }
+    if (IS_PC) {
+      const info = document.querySelector('.chat-header-info');
+      if (info) {
+        // Phone appears as "phone +1 (760) 237-9469" in the header info.
+        const m = /phone\s*\+?[\d\s()-]{7,}/i.exec(info.textContent || '');
+        if (m) return m[0].replace(/^phone/i, '').trim();
+      }
+      return null;
+    }
     return null;
   }
 
@@ -605,6 +627,20 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
       toolbarWrap.style.cssText = 'padding-top:4px;padding-bottom:4px;border-bottom:1px solid var(--ds-border,#e5e7eb)';
       toolbarWrap.appendChild(bar);
       nameEl.parentElement.insertBefore(toolbarWrap, nameEl.nextSibling);
+      return;
+    }
+
+    /* --- Patient Connect: full-width row under the chat header --- */
+    if (IS_PC) {
+      const header = nameEl.closest('.chat-header') || document.querySelector('.chat-header');
+      const left = header ? header.querySelector('.chat-header-left') : null;
+      const anchor = left || header;
+      if (!anchor || !anchor.parentElement) return;
+      Object.assign(bar.style, {
+        width: '100%', marginTop: '4px', paddingTop: '6px',
+        borderTop: '1px solid var(--ds-border,#e5e7eb)', gap: '4px', flexWrap: 'wrap',
+      });
+      anchor.parentElement.insertBefore(bar, anchor.nextSibling);
       return;
     }
 

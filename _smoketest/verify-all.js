@@ -62,7 +62,14 @@ function git(args) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-const gitStatus = git(['status', '--porcelain']) || '';
+// git() returns null when the command fails, which includes "this tree is not a
+// git repo at all" — the userscripts folder is NOT one. Treating null as "no
+// changes" made dirtyFiles empty, headVersion() always null, and the R10
+// version-bump discipline (below) silently unenforced, while the report still
+// printed "working tree clean". That is a false PASS, so it is now its own warn.
+const gitStatusRaw = git(['status', '--porcelain']);
+const gitAvailable = gitStatusRaw !== null;
+const gitStatus = gitStatusRaw || '';
 // strip porcelain status chars AND git's quotes around spaced paths
 // (quoted paths never matched plain filenames -> dirtyFiles was always empty
 // -> version-bump enforcement was blind; 2026-08-06 fix)
@@ -91,6 +98,10 @@ let checked = 0;
 function FAIL(msg) { fails.push(msg); }
 function WARN(msg) { warns.push(msg); }
 function INFO(msg) { infos.push(msg); }
+
+if (!gitAvailable) {
+  WARN('git unavailable — version-bump discipline (R10) and drift proof are NOT enforced on this tree');
+}
 
 for (const file of files) {
   const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -132,10 +143,16 @@ for (const file of files) {
   }
 
   // @match required (or @include)
+  const HOST_WIDE = /^(\*|https?:\/\/\*\/\*|\*:\/\/*\/\*)$/;
   if (!kv.match && !kv.include) {
     WARN(`${file}: no @match/@include — installs nowhere by default`);
-  } else if (kv.match && kv.match.some(m => /^(\*|https?:\/\/\*\/\*|\*:\/\/*\/\*)$/.test(m))) {
-    WARN(`${file}: @match "${kv.match.join(', ')}" is host-wide`);
+  } else {
+    if (kv.match && kv.match.some(m => HOST_WIDE.test(m))) {
+      WARN(`${file}: @match "${kv.match.join(', ')}" is host-wide`);
+    }
+    if (kv.include && kv.include.some(m => HOST_WIDE.test(m))) {
+      WARN(`${file}: @include "${kv.include.join(', ')}" is host-wide`);
+    }
   }
 
   // @grant presence + GM_* usage consistency (typeof-guarded usage is a valid fallback)
@@ -205,21 +222,54 @@ for (const file of files) {
   if (nEmpty > 0) WARN(`${file}: ${nEmpty} empty catch(es) — silent failure surface`);
 
   // --- 5. Trusted Types / innerHTML on docs.google.com -----------------------
-  if (/docs\.google\.com/.test((kv.match || []).join(' ')) && /innerHTML/.test(src)) {
+  // Usage-aware: strip line comments first so a *mention* ("use replaceChildren,
+  // not innerHTML") doesn't trip the WARN — only a real `innerHTML =` assignment
+  // on a docs.google.com page can throw under Trusted Types.
+  const codeOnly = src.replace(/^\s*\/\/.*$/gm, '');
+  if (/docs\.google\.com/.test((kv.match || []).join(' ')) && /\binnerHTML\s*=/.test(codeOnly)) {
     WARN(`${file}: @match docs.google.com + innerHTML — Trusted Types will throw (Tracking Bus v2.2 lesson)`);
   }
 }
 
 // ---------------------------------------------------------------------------
+// Extension drift gate (port-pins.json + verify-port.js).
+// The GHL extension carries hashed copies of three userscripts. Nothing else in
+// this repo notices when the master moves, so the repo gate runs it too.
+// The extension folder's unpacked id derives from its absolute path, so it is
+// found by pattern, never by a hardcoded id or timestamp.
+// ---------------------------------------------------------------------------
+(function gateExtension() {
+  const base = path.resolve(ROOT, '..');
+  const mirror = fs.existsSync(base)
+    ? fs.readdirSync(base).find(d => d.startsWith('ghl-current-orders-delivery-review-v11-'))
+    : null;
+  const extDir = mirror && path.join(base, mirror, 'ghl-current-orders-delivery-review-v11');
+  const gate = extDir && path.join(extDir, 'verify-port.js');
+  if (!gate || !fs.existsSync(gate)) {
+    WARN('GHL extension not found beside this repo — verify-port.js drift gate skipped');
+    return;
+  }
+  const r = spawnSync(process.execPath, ['verify-port.js'], { cwd: extDir, encoding: 'utf8' });
+  if (r.status === 0) {
+    INFO(`extension drift gate: ${(r.stdout.match(/RESULT: (.+)/) || [, '?'])[1]}`);
+  } else {
+    const drift = (r.stdout || '').split('\n').filter(l => l.includes('FAIL')).join(' | ');
+    FAIL(`GHL extension drift gate (verify-port.js): ${drift || (r.stderr || '').split('\n')[0]}`);
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
 
-console.log(`\nverify-all — ${checked} scripts, ${files.length - checked} non-.user.js skipped\n`);
+console.log(`\nverify-all — ${checked} userscripts, ${files.length - checked} non-.user.js skipped, + GHL extension drift gate\n`);
 if (infos.length) { console.log(`INFO (${infos.length}):`); infos.forEach(i => console.log('  • ' + i)); console.log(); }
 if (warns.length) { console.log(`WARN (${warns.length}) — debt backlog:`); warns.forEach(w => console.log('  • ' + w)); console.log(); }
 if (fails.length) { console.log(`FAIL (${fails.length}):`); fails.forEach(f => console.log('  ✗ ' + f)); console.log(); }
 
-if (dirtyFiles.length) {
+if (!gitAvailable) {
+  console.log('git: unavailable — version-bump discipline NOT enforced');
+} else if (dirtyFiles.length) {
   console.log(`git: ${dirtyFiles.length} .user.js file(s) dirty on disk (${dirtyFiles.join(', ')})`);
 } else {
   console.log('git: working tree clean for .user.js files');

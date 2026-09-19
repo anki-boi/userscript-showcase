@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EasyPost Tracking Copier
 // @namespace    userscript-showcase
-// @version      2.7
+// @version      2.8
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Auto-copy tracking details from EasyPost tracking pages
@@ -11,13 +11,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[EasyPost v2.7] boot');
+console.info('[EasyPost v2.8] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['EasyPost'] = {
   name: 'EasyPost Tracking Copier',
-  version: '2.7',
+  version: '2.8',
   state: 'idle',
   message: '',
   output: null,
@@ -91,7 +91,7 @@ window.__scripts['EasyPost'] = {
     }
     navigator.clipboard.writeText(text).then(() => {
       toast('✓ Tracking copied', true);
-      setTimeout(() => window.close(), 700);
+      // v2.8 (Jeyson): no auto-close — the tab stays open; close it yourself.
     }).catch(() => toast('⚠ Copy failed', false));
   }
 

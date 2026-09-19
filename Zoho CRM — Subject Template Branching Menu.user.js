@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM — Subject Template Branching Menu
 // @namespace    jeyson.rx.tools
-// @version      1.1.6
+// @version      1.1.11
 // @author       Jeyson Dagondon
 // @description  Click the glowing "Subject" label to insert order/lab subject lines
 // @match        *://crm.zoho.com/*
@@ -12,11 +12,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[SubjectBranch v1.1.6] boot');
+console.info('[SubjectBranch v1.1.11] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branching Menu', version: '1.1.6', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branching Menu', version: '1.1.10', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -98,7 +98,7 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
       },
       "GHK-Cu / Argireline / Leuphasyl Cream": {
         "1 Month / 1 bottle (30gm)": "Order GHK-Cu/Argireline/Leuphasyl Cream (1 bottle / 1 month)",
-        "3 Months / 3 bottles (90gm)": "Order GHK-Cu/Argireline/Leuphasyl Cream (3 bottles / 3 months)"
+        "3 Months / 3 bottles (30gm each)": "Order GHK-Cu/Argireline/Leuphasyl Cream (3 bottles / 3 months)"
       },
       "Semax Nasal Spray": {
         "1 Month / 1 bottle": "Order Semax Nasal Spray (1 bottle / 1 month)",
@@ -159,7 +159,7 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
       }
     },
 
-    "Progress": {
+    "Pharmacy B": {
       "PT-141 Injection": {
         "1 Vial / 2mL": "Order PT-141 Injection (1 vial 2mL / 4 weeks)"
       },
@@ -207,9 +207,49 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
         "NJ Patient": "Check if Thyroid labs are in - NJ patient",
         "NY Patient": "Check if Thyroid labs are in - NY patient",
         "RI Patient": "Check if Thyroid labs are in - RI patient"
-      }
+      },
+      "FU BPR": "FU BPR"
     }
   };
+
+  /* Subject lines that also stamp a due date on the create form.
+     Value: 'followingMonday' (next Monday strictly after today — FU BPR only)
+     or { weeks: N } → the EXACT date N weeks from today (no Monday snap). */
+  const SUBJECT_DUE_DATES = {
+    'FU BPR': 'followingMonday',
+    'Order CJC/IPA (1 vial / 2 months)': { weeks: 6 },
+    'Order RxFlow-Specific Labs for Tesa/IPA': { weeks: 12 },
+    'Order 3 months Tesa/IPA': { weeks: 12 }
+  };
+
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  function formatZohoDate(d) {
+    return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  }
+
+  // The next Monday strictly after `from` (if `from` is a Monday → +7).
+  function followingMonday(from) {
+    const d = from ? new Date(from.getTime()) : new Date();
+    d.setHours(0, 0, 0, 0);
+    let delta = (1 - d.getDay() + 7) % 7; // 0 when today is Monday
+    if (delta === 0) delta = 7;
+    d.setDate(d.getDate() + delta);
+    return d;
+  }
+
+
+
+  // Same injection technique as Zoho Task Due Date Quick-Set (Inline):
+  // the 'change' event fires the field's inline quickTask.handleDuedateChange().
+  function setDueDateField(field, dateStr) {
+    field.focus();
+    field.value = dateStr;
+    field.setAttribute('aria-valuenow', dateStr);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    field.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
 
   /* ============================================================
      STYLES — light theme
@@ -341,7 +381,7 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
     if (e.key === 'Escape') closeMenu();
   }
 
-  function buildColumn(headerText, entries, onPick, isLeafCol) {
+  function buildColumn(headerText, entries, onPick, leaf) {
     const col = document.createElement('div');
     col.className = 'jx-col';
 
@@ -351,8 +391,9 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
     col.appendChild(hdr);
 
     entries.forEach(function (label) {
+      const isLeaf = typeof leaf === 'function' ? leaf(label) : !!leaf;
       const item = document.createElement('div');
-      item.className = 'jx-item' + (isLeafCol ? ' jx-leaf' : '');
+      item.className = 'jx-item' + (isLeaf ? ' jx-leaf' : '');
       item.textContent = label;
       item.title = label;
       item.addEventListener('mouseenter', function () {
@@ -360,7 +401,7 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
           n.classList.remove('jx-active');
         });
         item.classList.add('jx-active');
-        if (!isLeafCol) onPick(label, item);
+        if (!isLeaf) onPick(label, item);
       });
       item.addEventListener('click', function (e) {
         e.stopPropagation();
@@ -431,12 +472,18 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
           pharmacy,
           Object.keys(TEMPLATES[pharmacy]),
           function (med, medItem) {
+            const node = TEMPLATES[pharmacy][med];
+            if (typeof node === 'string') {   // directly-clickable leaf
+              insertSubject(node);
+              closeMenu();
+              return;
+            }
             trimColumnsAfter(1);
             const varCol = buildColumn(
               med,
-              Object.keys(TEMPLATES[pharmacy][med]),
+              Object.keys(node),
               function (variant) {
-                insertSubject(TEMPLATES[pharmacy][med][variant]);
+                insertSubject(node[variant]);
                 closeMenu();
               },
               true
@@ -444,7 +491,7 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
             menuRoot.appendChild(varCol);
             positionSubColumn(varCol, medCol, medItem);
           },
-          false
+          function (med) { return typeof TEMPLATES[pharmacy][med] === 'string'; }
         );
         menuRoot.appendChild(medCol);
         positionSubColumn(medCol, pharmCol, pharmItem);
@@ -483,6 +530,23 @@ window.__scripts['SubjectBranch'] = { name: 'Zoho CRM — Subject Template Branc
 
     input.focus();
     try { input.setSelectionRange(text.length, text.length); } catch(e) { console.warn('[SubjectBranch]', e); }
+
+    const due = SUBJECT_DUE_DATES[text];
+    if (due) {
+      const dueField = document.getElementById('Crm_Tasks_DUEDATE');
+      let dueDate;
+      if (due && typeof due === 'object') {
+        dueDate = new Date();
+        dueDate.setDate(dueDate.getDate() + (due.weeks || 0) * 7);
+      } else {
+        dueDate = followingMonday();
+      }
+      if (dueField) {
+        setDueDateField(dueField, formatZohoDate(dueDate));
+      } else {
+        toast('Due date field not found', true);
+      }
+    }
 
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).catch(function (e) { console.warn('[SubjectBranch]', e); });

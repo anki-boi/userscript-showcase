@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM — Peptide SMS Templates
 // @namespace    userscript-showcase
-// @version      5.11.9
+// @version      5.19.0
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @match        https://crm.zoho.com/*
@@ -10,12 +10,145 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[RxSMS v5.11.9] boot');
+console.info('[RxSMS v5.19.0] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', version: '5.11.9', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', version: '5.19.0', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
+// v5.19.0 CHANGES (2026-09-16):
+//  - MOTS-C gets Pharmacy L's 10 mg/mL option (Template Menu v6.23). Same drug,
+//    half the concentration: a 5 mL vial holds 50 mg, so the clinic's 5 mg dose
+//    is 50 units (0.5 mL) instead of 25, and one vial lasts 5 weeks — 2 vials =
+//    10 weeks / 2.5 months, 4 vials = 20 weeks / 5 months.
+//    Tracking & Dosing: two new labels, "MOTS-C 10mg/mL (Pharmacy L) / 2|4 vials",
+//    carrying the 10mg/mL concentration so the patient text can never state the
+//    20 mg/mL vial (and the 25-unit dose that goes with it).
+//    Order Placed 2.0: one more badged Pharmacy L chip ("MOTS-C 10mg/mL") — a
+//    separate chip rather than a third variant of "MOTS-C" because the units
+//    change with the concentration. Pharmacy L SHIPPING line + pharmacy class are
+//    unchanged (the new labels join OP2_PHARMACYL).
+//  - ADDITIVE otherwise: the 20 mg/mL MOTS-C labels, every other template, and
+//    every parser regex are untouched.
+// v5.18.0 CHANGES (2026-09-15):
+//  - Pharmacy L catalog completed. The Template Menu Pharmacy L branch (v6.21) now
+//    carries the WHOLE Pharmacy L peptide sheet, so the Rx side gains the matching
+//    duplicates for TB-500, GHK-Cu, MOTS-C, NAD+ injectable and NAD Nasal
+//    Spray next to the existing BPC-157 / Tesamorelin pair.
+//    Tracking & Dosing: new "(Pharmacy L)" labels (1/2/3 x vial, or 1/2 bottles
+//    for the nasal spray) built from the sheet's own concentrations.
+//    Order Placed 2.0: five more badged Pharmacy L chips. The Pharmacy L SHIPPING
+//    line, the never-splits rule and the pharmacy class are unchanged.
+//  - NAD+ injectable (Pharmacy L) dosing reads "80 units (80 mg)". The sheet's
+//    "40 units (80 mg)" is a units typo at 100 mg/mL (80 units = 0.8 mL), and
+//    80 mg 3x/week is exactly what makes the 10 mL / 1000 mg vial last the
+//    sheet's 1 month. Same arithmetic reconciliation the MOTS-C Pharmacy L entry
+//    went through. Every other row of the sheet is self-consistent.
+//  - ADDITIVE otherwise: no existing template text or parser regex changed.
+// v5.17.0 CHANGES (2026-09-11):
+//  - NEW: Pharmacy L pharmacy class. Pharmacy L (portal.pharmacyl.example) compounds its
+//    own vials of peptides that already exist under Pharmacy A, so the duplicates
+//    are deliberate (Jeyson): BPC-157 injectable + Tesamorelin injectable at
+//    5 mg/mL per the Template Menu Pharmacy L branch. New TRACKING entries
+//    ("<drug> (Pharmacy L) / 1|2|3 vial"), an OP2-only "Pharmacy L" chip group, and
+//    a Pharmacy L badge on the Tracking & Dosing entries + copy toast.
+//  - NEW: Pharmacy L SHIPPING line — "Tracking will be texted directly from
+//    Pharmacy L Pharmacy..." — renders in Order Placed 2.0 (op2PharmacyFor now
+//    returns 'pharmacyl'; the Pharmacy A/Pharmacy L flavors share ONE body object).
+//    Pharmacy L legs never inherit Pharmacy A's split-shipment configs.
+//  - A pasted GLP-1 block whose source is "[BLRX] ..." (Blue Five Labs /
+//    Greenstone Rx) is tagged Pharmacy L and claims the Pharmacy L SHIPPING line.
+//  - Order Placed 2.0: the Tirzepatide / Retatrutide / Semaglutide chips are
+//    MERGED into one "GLP-1" chip (same paste box; the drug name comes off the
+//    parsed Medication line). APPEND-ONLY: every click adds another GLP-1 leg;
+//    there is no chip toggle-off (Clear resets). Legacy Order Placed / Still
+//    Processing keep their three chips.
+//  - ADDITIVE otherwise: no existing template text, parser regex, or tab
+//    behavior changed.
+// v5.16.1 CHANGES (2026-09-10):
+//  - GLP-1 calculator v1.14 multi-vial compatibility (ships as a pair). The
+//    "Medication: 2 vials of X 8mg/0.5mL (2mL vial) = 64mg total" line already
+//    parsed (parseCalcMedLine accepts "N vials"); the Pharmacy A med block now
+//    renders the count ("2 x 2 mL vials = 64 mg Retatrutide total"), and the
+//    per-0.5mL NOTE reads "Each vial still contains 32 mg total." for multi-
+//    vial orders. The legacy no-paren pack paste folds to the same output.
+//    Single-vial output is byte-identical; no parser regex changed.
+// v5.16.0 CHANGES (2026-09-08):
+//  - New product: CJC-1295 / Ipamorelin Troche (2mg/2mg, Pharmacy B pharmacy —
+//    neither Pharmacy A nor Pharmacy J). Wired end-to-end: TRACKING entry under
+//    Oral / Topical / Nasal, ORDER_ITEMS + OP2_MAP chip "CJC-1295 / Ipamorelin
+//    Troche", and OP2_OTHER_PHARMACY so it never claims Pharmacy A will text
+//    tracking. Dosing is time-agnostic per Jeyson ("dissolve 1 troche under
+//    the tongue", no AM/PM); carries the same STORE_FRIDGE note as the other
+//    peptide troches. op2SplitKey now ignores troches (the 'cjc' substring
+//    match would otherwise show the injectable's split-shipment picker).
+// v5.12.2 CHANGES:
+//  - Removed em-dashes (—) from patient-facing + UI copy: manager reads them as
+//    an AI tell. Opener/split-note/fallback + picker titles now use periods/colons.
+// v5.13.0 CHANGES:
+//  - Order Placed 2.0: Pharmacy A pharmacy flavor (Jeyson 2026-08-27). Any order
+//    containing a Pharmacy A med renders the Pharmacy A template: short opener, fixed
+//    "up to 10 days" fulfillment, SHIPPING: line (Pharmacy A texts tracking from
+//    (832) 437-8624), DOSING: header, bare med lines (no "Medication:" prefix),
+//    GLP-1 legs as 3-line med block + "NOTE: ... per 0.5 mL ..." (GLP-1 only),
+//    "Guide:" header, short footer. Pharmacy J-only orders keep the original
+//    generic template byte-identical; mixed orders use the Pharmacy A template as
+//    the base. No double blank lines anywhere.
+// v5.13.1 CHANGES:
+//  - Fix: Pharmacy A guide links were wrapped in "@url:`...`" — that markup is the
+//    Hermes desktop app's link-paste format (rode in on the pasted template),
+//    NOT clinic SMS syntax. Now rendered as plain URLs:
+//    "Guide: https://securelinks.drdeanjones.com/2p8vjnvs".
+// v5.13.2 CHANGES:
+//  - Renamed CB4211 -> MOTS-c everywhere (Jeyson 2026-08-27): chip "MOTS-c",
+//    TRACKING "MOTS-c / 8 kits" (med "8 kits of MOTS-c"), DOSE_RULES "MOTS-c",
+//    DRUG_ALIASES retargeted so both 'mots-c' and legacy 'cb4211' still resolve.
+// v5.15.0 CHANGES (Jeyson 2026-08-28):
+//  - Pharmacy tagging is no longer "Pharmacy J or else Pharmacy A". MOTS-c (South
+//    Lake), SS-31 (Pharmacy B), DSIP Injection (Pharmacy K) and DSIP Troches
+//    (Pharmacy D) are tagged 'other': NO Pharmacy A SHIPPING line, never claims
+//    Pharmacy A will text tracking. OP2_OTHER_PHARMACY is the one place to extend.
+//  - OP2_FLAVOR.pharmacyj renamed OP2_FLAVOR.direct: the pharmacy-direct template
+//    (short opener, 10-day line, "updates come directly from the pharmacy")
+//    now covers Pharmacy J AND every other non-Pharmacy A pharmacy. Pharmacy A still
+//    wins any order that contains a Pharmacy A med. Greenwich is out of scope
+//    (Greenwich peptides don't get these templates).
+// v5.14.0 CHANGES (Jeyson 2026-08-28 — new template set):
+//  - Order Placed 2.0 PHARMACY A flavor retuned: "high order volume" + "reply
+//    here." (no "for an update"); SHIPPING line drops the phone number and now
+//    reads "Tracking will be texted directly from Pharmacy A Pharmacy ... watch
+//    for a message mentioning "Pharmacy A.""; per-0.5mL NOTE moved BELOW the dose
+//    line and reworded ("Pharmacy A lists concentration per 0.5 mL, not the more
+//    common 1 mL. Your vial still contains X total."); dose sentence trimmed to
+//    "Inject 17 units (~2.5 mg) once weekly." (no "under the skin", no
+//    "morning or evening").
+//  - NEW OP2 PHARMACY J flavor (supersedes the v5.13 "Pharmacy J == generic
+//    byte-identical" lock): short "Your order has been placed!" opener, 1-line
+//    fulfillment ("Please allow up to 10 days for pharmacy processing and
+//    delivery. Shipping, tracking, and dosing updates will come directly from
+//    the pharmacy via text/email."), "DOSING:" header (blank line after), bare
+//    med lines, "Full Guide:" + link on the next line, footer "... Shipping/
+//    delivery questions? Reply here." No SHIPPING line (Pharmacy J has none).
+//  - OP2_BODY_BARE: compact stack bodies for the bare flavors (SLU-PP/AOD/
+//    O-304 1-Month + 3/6-Month Warrior + AOD/O-304 refill) using "Weeks 1-2 /
+//    Week 3+ / Days 1-14 / Day 15+" lines. O-304 100 mg renders as
+//    "100 mg (2 x 50 mg capsules)" per the 50mg-caps-only rule. Legacy tabs
+//    and the Stacks TRACKING bodies are UNTOUCHED (additive rule).
+// v5.12.1 CHANGES:
+//  - Panel width: 480px -> 50vw (fills half the screen, centered). (Jeyson 2026-08-26)
+// v5.12.0 CHANGES:
+//  - NEW TAB "Order Placed 2.0": combined order-placed + dosing message,
+//    sent the moment the order is placed, NO tracking numbers (Carrie
+//    directive 2026-08-26). Click chips to accumulate; every med gets a
+//    dosing leg. GLP-1 chips (Tirzepatide/Retatrutide/Semaglutide) pop a
+//    paste box -> parseGLP1 -> dosing leg (multiple GLP-1s supported). Split
+//    products (Wolverine, CJC/IPA, ...) prompt for the shipment -> append a
+//    "ships in parts" note. New/refill (SLU-PP, O-304), strengths (Methylene
+//    Blue), and vial-count variants prompt for a picker. Storage notes ride
+//    their med's leg. Guide links consolidated + deduped to one bottom block
+//    (1 distinct link = "Full guide:"; 2+ = "Guides:" keyed by med).
+//  - ADDITIVE: all existing tabs untouched. Order Placed 2.0 reuses TRACKING,
+//    SPLIT, parseGLP1, FULFILLMENT. No existing functionality changed.
 // v5.11.8 CHANGES:
 //  - Unified Parser: "Parse & Copy" now closes the panel automatically after
 //    a successful copy (Jeyson 2026-08-20 — preview not needed; he checks the
@@ -128,7 +261,7 @@ window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', versio
 (function () {
   'use strict';
 
-  const __VER__ = '5.11.9'; // keep in sync with @version (gate FAILs on drift)
+  const __VER__ = '5.19.0'; // keep in sync with @version (gate FAILs on drift)
 
   const RL_ID = '4159382000379742568'; // ABR RingCentral SMS related list
 
@@ -255,6 +388,37 @@ One quick note: we ship peptides a few vials at a time because they have a limit
     "SLU-PP-332",
     "Tesofensine",
   ]);
+
+  // ---- PHARMACYL (2026-09-11) -----------------------------------------------
+  // Pharmacy L (portal.pharmacyl.example) compounds its OWN vials of peptides that also
+  // exist under Pharmacy A — same drug, different concentration. The duplicate
+  // entries are deliberate (Jeyson): pick the fulfilling pharmacy. Dosing =
+  // Template Menu > Pharmacy L branch (one vial per Duration tier; the v6.21
+  // expansion added TB-500 / GHK-Cu / MOTS-C / NAD+ / NAD Nasal Spray).
+  // OP2_PHARMACYL keys must match TRACKING entry labels (they also drive the
+  // op2PharmacyFor() class, the OP2 chips via OP2_MAP, and the panel badges).
+  const OP2_PHARMACYL = new Set([
+    "BPC-157 Injection (Pharmacy L) / 1 vial",
+    "BPC-157 Injection (Pharmacy L) / 2 vials",
+    "BPC-157 Injection (Pharmacy L) / 3 vials",
+    "TB-500 (Pharmacy L) / 1 vial",
+    "TB-500 (Pharmacy L) / 2 vials",
+    "GHK-Cu Injection (Pharmacy L) / 1 vial",
+    "GHK-Cu Injection (Pharmacy L) / 2 vials",
+    "GHK-Cu Injection (Pharmacy L) / 3 vials",
+    "MOTS-C (Pharmacy L) / 1 vial",
+    "MOTS-C (Pharmacy L) / 2 vials",
+    "MOTS-C 10mg/mL (Pharmacy L) / 2 vials",
+    "MOTS-C 10mg/mL (Pharmacy L) / 4 vials",
+    "NAD+ (Pharmacy L) / 1 vial",
+    "NAD+ (Pharmacy L) / 2 vials",
+    "NAD+ (Pharmacy L) / 3 vials",
+    "NAD Nasal Spray (Pharmacy L) / 1 bottle",
+    "NAD Nasal Spray (Pharmacy L) / 2 bottles",
+    "Tesamorelin (Pharmacy L) / 1 vial",
+    "Tesamorelin (Pharmacy L) / 2 vials",
+    "Tesamorelin (Pharmacy L) / 3 vials",
+  ]);
   const NO_INC = 'Please do not increase your dose unless instructed by our Medical Team.';
   const PICKUP = '';
   const HELP = 'Questions about shipping or delivery? Just reply to this message.';
@@ -374,6 +538,110 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         conc: "3mg/2mg per mL, 5mL vial",
         rx: "Inject 20 units (0.6 mg Tesamorelin / 0.4 mg Ipamorelin) under the skin every night at bedtime, Monday through Friday.",
       },
+      // ---- Pharmacy L duplicates (Template Menu > Pharmacy L, 2026-09-11) --------
+      // Deliberately the same drugs as Pharmacy A above, at Pharmacy L's own
+      // concentrations (Template Menu Pharmacy L branch, v6.20 + v6.21).
+      // Labels carry "(Pharmacy L)" so the panel and the OP2 pharmacy class can
+      // tell them apart; the patient-facing med strings stay clean. The vial
+      // count is the Template Menu tier multiple (one vial = one Duration
+      // column), so the wording differs per product while the shape does not.
+      "BPC-157 Injection (Pharmacy L) / 1 vial": {
+        med: "1 BPC-157",
+        conc: "5mg/mL, 5mL vial",
+        rx: "Inject 20 units (1 mg) into the muscle once daily at the injury site.",
+      },
+      "BPC-157 Injection (Pharmacy L) / 2 vials": {
+        med: "2 BPC-157",
+        conc: "5mg/mL, 5mL vials",
+        rx: "Inject 20 units (1 mg) into the muscle once daily at the injury site.",
+      },
+      "BPC-157 Injection (Pharmacy L) / 3 vials": {
+        med: "3 BPC-157",
+        conc: "5mg/mL, 5mL vials",
+        rx: "Inject 20 units (1 mg) into the muscle once daily at the injury site.",
+      },
+      "TB-500 (Pharmacy L) / 1 vial": {
+        med: "1 TB-500",
+        conc: "10mg/mL, 5mL vial",
+        rx: "Inject 10 units (1 mg) under the skin once daily.",
+      },
+      "TB-500 (Pharmacy L) / 2 vials": {
+        med: "2 TB-500",
+        conc: "10mg/mL, 5mL vials",
+        rx: "Inject 10 units (1 mg) under the skin once daily.",
+      },
+      "GHK-Cu Injection (Pharmacy L) / 1 vial": {
+        med: "1 GHK-Cu",
+        conc: "50mg/mL, 3mL vial",
+        rx: "Inject 5 units (2.5 mg) under the skin once daily, Monday through Friday.",
+      },
+      "GHK-Cu Injection (Pharmacy L) / 2 vials": {
+        med: "2 GHK-Cu",
+        conc: "50mg/mL, 3mL vials",
+        rx: "Inject 5 units (2.5 mg) under the skin once daily, Monday through Friday.",
+      },
+      "GHK-Cu Injection (Pharmacy L) / 3 vials": {
+        med: "3 GHK-Cu",
+        conc: "50mg/mL, 3mL vials",
+        rx: "Inject 5 units (2.5 mg) under the skin once daily, Monday through Friday.",
+      },
+      "MOTS-C (Pharmacy L) / 1 vial": {
+        med: "1 MOTS-C",
+        conc: "20mg/mL, 5mL vial",
+        rx: "Inject 25 units (5 mg) under the skin twice weekly in the morning or before your workout.",
+      },
+      "MOTS-C (Pharmacy L) / 2 vials": {
+        med: "2 MOTS-C",
+        conc: "20mg/mL, 5mL vials",
+        rx: "Inject 25 units (5 mg) under the skin twice weekly in the morning or before your workout.",
+      },
+      // MOTS-C at Pharmacy L's OTHER concentration (v5.19.0, Template Menu v6.23).
+      // A 5 mL vial at 10 mg/mL holds 50 mg, so the SAME 5 mg dose is 50 units
+      // (0.5 mL) instead of 25, and 5 mg twice weekly = 5 weeks per vial:
+      // 2 vials = 10 weeks / 2.5 months, 4 vials = 20 weeks / 5 months. These
+      // labels exist so the patient text never states the 20 mg/mL vial.
+      "MOTS-C 10mg/mL (Pharmacy L) / 2 vials": {
+        med: "2 MOTS-C",
+        conc: "10mg/mL, 5mL vials",
+        rx: "Inject 50 units (5 mg) under the skin twice weekly in the morning or before your workout.",
+      },
+      "MOTS-C 10mg/mL (Pharmacy L) / 4 vials": {
+        med: "4 MOTS-C",
+        conc: "10mg/mL, 5mL vials",
+        rx: "Inject 50 units (5 mg) under the skin twice weekly in the morning or before your workout.",
+      },
+      "NAD+ (Pharmacy L) / 1 vial": {
+        med: "1 NAD+",
+        conc: "100mg/mL, 10mL vial",
+        // Sheet reads "40 units (80 mg)" — a units typo at 100 mg/mL
+        // (80 units = 0.8 mL). See the v5.18.0 header note.
+        rx: "Inject 80 units (80 mg) under the skin 3 times per week.",
+      },
+      "NAD+ (Pharmacy L) / 2 vials": {
+        med: "2 NAD+",
+        conc: "100mg/mL, 10mL vials",
+        rx: "Inject 80 units (80 mg) under the skin 3 times per week.",
+      },
+      "NAD+ (Pharmacy L) / 3 vials": {
+        med: "3 NAD+",
+        conc: "100mg/mL, 10mL vials",
+        rx: "Inject 80 units (80 mg) under the skin 3 times per week.",
+      },
+      "Tesamorelin (Pharmacy L) / 1 vial": {
+        med: "1 Tesamorelin",
+        conc: "5mg/mL, 5mL vial",
+        rx: "Inject 20 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
+      },
+      "Tesamorelin (Pharmacy L) / 2 vials": {
+        med: "2 Tesamorelin",
+        conc: "5mg/mL, 5mL vials",
+        rx: "Inject 20 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
+      },
+      "Tesamorelin (Pharmacy L) / 3 vials": {
+        med: "3 Tesamorelin",
+        conc: "5mg/mL, 5mL vials",
+        rx: "Inject 20 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
+      },
       "Klow Blend (BPC/KPV/GHK/TB)": {
         med: "1 Klow Blend (BPC-157 / KPV / GHK-Cu / TB-500)",
         conc: "3mg/3mg/10mg/3mg per mL, 5mL vial",
@@ -421,8 +689,8 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         rx: "Inject 20 units (1 mg) under the skin every day, Monday through Friday.",
         link: GUIDE_TA1,
       },
-      "CB4211 (MOTS-c) / 8 kits": {
-        med: "8 kits of CB4211 (MOTS-c)",
+      "MOTS-c / 8 kits": {
+        med: "8 kits of MOTS-c",
         conc: "10mg per kit, reconstituted with 1mL bacteriostatic water",
         rx: "Reconstitute one kit with 1 mL of bacteriostatic water, then inject 50 units (5 mg) under the skin twice weekly in the morning or before your workout.",
         link: GUIDE_TA1,
@@ -496,6 +764,13 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         rx: "Take 1 pill (500 mcg BPC / 500 mcg KPV each) per day, on an empty stomach.",
         pickup: false,
       },
+      "CJC-1295 / Ipamorelin Troche": {
+        med: "CJC-1295 / Ipamorelin troches",
+        conc: "2mg/2mg per troche",
+        rx: "Dissolve 1 troche (2 mg CJC-1295 / 2 mg Ipamorelin) under the tongue.",
+        note: STORE_FRIDGE,
+        pickup: false,
+      },
       "Dihexa Pill": {
         med: "Dihexa pills",
         conc: "20mg per pill",
@@ -543,6 +818,19 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         med: "NAD+ nasal spray",
         conc: "30mg/mL, 15mL bottle",
         rx: "Use 1 spray in each nostril every morning daily, up to 2 times per day as directed.",
+        pickup: false,
+      },
+      // Pharmacy L's own NAD nasal spray (300 mg/mL vs the 30 mg/mL above).
+      "NAD Nasal Spray (Pharmacy L) / 1 bottle": {
+        med: "1 NAD Nasal Spray",
+        conc: "300mg/mL, 10mL bottle",
+        rx: "Use 1 spray in each nostril every morning, up to 2 times per day as directed.",
+        pickup: false,
+      },
+      "NAD Nasal Spray (Pharmacy L) / 2 bottles": {
+        med: "2 NAD Nasal Spray",
+        conc: "300mg/mL, 10mL bottles",
+        rx: "Use 1 spray in each nostril every morning, up to 2 times per day as directed.",
         pickup: false,
       },
       "Nicotine Troches": {
@@ -842,7 +1130,7 @@ Let us know if you have any questions!`,
     "NAD+":                  { class: "inject", cadence: "3 times per week", special: ["splitVolume"] },
     "PT-141":                { class: "inject", cadence: "once daily, Monday through Friday" },
     "Thymosin Alpha-1":      { class: "inject", cadence: "every day, Monday through Friday", guide: "https://securelinks.drdeanjones.com/3ak8bksx" },
-    "MOTS-c (CB4211)":       { class: "inject", route: "reconstitute", cadence: "twice weekly in the morning or before your workout", timing: "Reconstitute one kit with 1 mL of bacteriostatic water, then inject", special: ["reconstitute"], guide: "https://securelinks.drdeanjones.com/3ak8bksx" },
+    "MOTS-c":       { class: "inject", route: "reconstitute", cadence: "twice weekly in the morning or before your workout", timing: "Reconstitute one kit with 1 mL of bacteriostatic water, then inject", special: ["reconstitute"], guide: "https://securelinks.drdeanjones.com/3ak8bksx" },
     "Epithalon":             { class: "inject", cadence: "once daily, Monday through Friday" },
     "DSIP":                  { class: "inject", cadence: "once nightly at bedtime, Monday through Friday" },
     "DSIP / BPC-157 / CJC":  { class: "inject", cadence: "once nightly at bedtime, Monday through Friday", special: ["blend"] },
@@ -1091,8 +1379,8 @@ Let us know if you have any questions!`,
     'wolverine': 'wolverine blend',
     'wolverine strong': 'wolverine blend',
     'aod': 'aod-9604',
-    'mots-c': 'mots-c (cb4211)',
-    'cb4211': 'mots-c (cb4211)',
+    'mots-c': 'mots-c',
+    'cb4211': 'mots-c',
     'pregnyl hcg': 'pregnyl (hcg) 10,000',
     'pregnyl (hcg)': 'pregnyl (hcg) 10,000',
   };
@@ -1621,7 +1909,7 @@ We'll always check in before any future shipment goes out, just to confirm the t
       "SS-31",
       "PT-141",
       "Thymosin Alpha-1",
-      "MOTS-c (CB4211)",
+      "MOTS-c",
       "Epithalon",
       "DSIP",
       "DSIP / BPC / CJC Blend",
@@ -1637,6 +1925,7 @@ We'll always check in before any future shipment goes out, just to confirm the t
       "5-Amino-1MQ",
       "BPC-157 Pill",
       "BPC / KPV Pill",
+      "CJC-1295 / Ipamorelin Troche",
       "Dihexa",
       "DSIP Troches",
       "GHK-Cu / Argireline / Leuphasyl Cream",
@@ -1675,6 +1964,563 @@ Thank you!`;
   function buildStillProcessingMessage(firstName, items) {
     return `Hi ${firstName}! This is Dr. Jones' Order Processing Team. Your ${formatOrderList(items)} order is still processing in the pharmacy. ${FULFILLMENT.stillProcessing[fulfillmentMode()]} We're keeping a close eye on it and will send your tracking info as soon as it's ready.`;
   }
+
+  // ---- TAB: ORDER PLACED 2.0 (2026-08-26) ----------------------------------
+  // NEW, additive tab. Combined "order placed + dosing" builder. Reuses the
+  // TRACKING table, SPLIT config, parseGLP1, FULFILLMENT, and guide links.
+  // NO tracking numbers in the message. Existing tabs are untouched.
+  // Merged GLP-1 chip (2026-09-11): the three per-drug chips were redundant —
+  // ONE chip opens the same paste box and the drug name comes off the parsed
+  // Medication line. APPEND-ONLY (each click adds another GLP-1 leg).
+  // GLP1_LEGACY_CHIPS are still in ORDER_ITEMS for the Order Placed / Still
+  // Processing tabs and get skipped when the OP2 pane renders its own chips.
+  const GLP1_CHIPS = new Set(['GLP-1']);
+  const GLP1_LEGACY_CHIPS = new Set(['Tirzepatide', 'Retatrutide', 'Semaglutide']);
+
+  // Pharmacy shipping lines. One SHIPPING line renders per pharmacy present in
+  // the order. Pharmacy J ships its own tracking without a named line (see
+  // ORDER_PLACED_PHARMACY_J); Pharmacy A and Pharmacy L both text tracking directly.
+  const OP2_SHIPPING = {
+    pharmacya: 'Tracking will be texted directly from Pharmacy A Pharmacy. Please watch for a message mentioning "Pharmacy A."',
+    pharmacyl: 'Tracking will be texted directly from Pharmacy L Pharmacy. Please watch for a message mentioning "Pharmacy L"',
+  };
+
+  // TRACKING labels that come from NEITHER Pharmacy A NOR Pharmacy J (Jeyson
+  // 2026-08-28): MOTS-c = Pharmacy C, SS-31 = Pharmacy B, DSIP Injection =
+  // Pharmacy K, DSIP Troches = Pharmacy D. They must never carry the Pharmacy A
+  // SHIPPING line. Add new labels here as pharmacies come up. (Greenwich
+  // peptides are out of scope — they don't use these templates.)
+  const OP2_OTHER_PHARMACY = new Set([
+    'MOTS-c / 8 kits',
+    'SS-31',
+    'DSIP Injection',
+    'DSIP Troches',
+    // Pharmacy B — added 2026-09-08 (same pharmacy as SS-31)
+    'CJC-1295 / Ipamorelin Troche',
+  ]);
+
+  // pharmacyj | pharmacyl | other | pharmacya. 'other' = known non-Pharmacy A,
+  // non-Pharmacy J, non-Pharmacy L pharmacy.
+  function op2PharmacyFor(label) {
+    if (PHARMACY_J_TRACKING.has(label)) return 'pharmacyj';
+    if (OP2_PHARMACYL.has(label)) return 'pharmacyl';
+    if (OP2_OTHER_PHARMACY.has(label)) return 'other';
+    return 'pharmacya';
+  }
+
+  // Per-pharmacy message flavor (Jeyson 2026-08-27). 'generic' = the original
+  // v5.12.0 composer, byte-identical. 'pharmacya' = the Pharmacy A template: short
+  // opener, fixed fulfillment, SHIPPING + DOSING: sections, bare med lines,
+  // GLP-1 3-line med block + per-0.5mL NOTE, "Guide:" header with plain links,
+  // short
+  // footer. Any order containing a Pharmacy A med uses the Pharmacy A flavor
+  // (Pharmacy A templating is the basis for mixed orders).
+  // Pharmacy L (2026-09-11) reuses the Pharmacy A body verbatim — only its SHIPPING
+  // line differs — so both flavors point at ONE object (no copy to drift).
+  const OP2_PHARMACYA_STYLE = {
+    head: "Hi {NAME}! This is Dr. Jones' Order Processing Team. Your order has been placed!",
+    fulfillment: "Processing may take up to 10 days due to additional quality testing and high order volume. If you don't receive tracking by day 7, reply here.",
+    dosingHeader: 'DOSING:',
+    guideSingle: 'Guide:',
+    guideMulti: 'Guides:',
+    bare: true,        // no "Medication:" prefixes
+    guideInline: true, // "Guide: <url>" on ONE line
+    glueDosing: true,  // DOSING: sits flush against the first leg
+    footer: ['Do not increase your dose unless instructed by our Medical Team. Questions? Reply here.'],
+  };
+  const OP2_FLAVOR = {
+    generic: {
+      head: "Hi {NAME}! This is Dr. Jones's Order Processing Team. Your order is in and we've placed it. Here are your dosing instructions so you're ready to go.",
+      fulfillment: null, // resolved at compose: allPharmacyJ ? ORDER_PLACED_PHARMACY_J : FULFILLMENT.orderPlaced[mode]
+      dosingHeader: 'Dosing Instructions',
+      guideSingle: 'Full guide:',
+      guideMulti: 'Guides:',
+      footer: [NO_INC, HELP],
+    },
+    pharmacya: OP2_PHARMACYA_STYLE,
+    pharmacyl: OP2_PHARMACYA_STYLE,
+    // Pharmacy-direct orders: Pharmacy J AND every other non-Pharmacy A pharmacy
+    // (Pharmacy C, Pharmacy B, Pharmacy K, Pharmacy D...). Same short opener as
+    // Pharmacy A, but the pharmacy ships/texts everything itself: no SHIPPING
+    // line, no tracking-by-day-7 promise, "Full Guide:" with the link on its
+    // own line, and a footer that points shipping questions back to us. The
+    // copy names no pharmacy, so it is safe for every one of them.
+    direct: {
+      head: "Hi {NAME}! This is Dr. Jones' Order Processing Team. Your order has been placed!",
+      fulfillment: 'Please allow up to 10 days for pharmacy processing and delivery. Shipping, tracking, and dosing updates will come directly from the pharmacy via text/email.',
+      dosingHeader: 'DOSING:',
+      guideSingle: 'Full Guide:',
+      guideMulti: 'Guides:',
+      bare: true,
+      guideInline: false,
+      glueDosing: false, // blank line between DOSING: and the first leg
+      footer: ['Do not increase your dose unless instructed by our Medical Team. Shipping/delivery questions? Reply here.'],
+    },
+  };
+
+  // Chip name -> TRACKING candidate entries [ [grp, label], ... ]. The first
+  // entry is the default when no variant picker is shown. Add/reorder here.
+  const OP2_MAP = {
+    // ---- Injectables
+    'CJC/Ipamorelin': [['Injectables', 'CJC/Ipamorelin']],
+    'Tesamorelin': [['Injectables', 'Tesamorelin / 2 vials'], ['Injectables', 'Tesamorelin / 4 vials']],
+    'Tesamorelin / Ipamorelin Blend': [['Injectables', 'Tesamorelin / Ipamorelin Blend']],
+    'BPC-157': [['Injectables', 'BPC-157 Injection / 1 vial']],
+    'GHK-Cu': [['Injectables', 'GHK-Cu Injection / 1 vial'], ['Injectables', 'GHK-Cu Injection / 2 vials']],
+    'TB-500': [['Injectables', 'TB-500 / 3 vials']],
+    'NAD+': [['Injectables', 'NAD+ Light / 1 vial'], ['Injectables', 'NAD+ Medium / 2 vials'], ['Injectables', 'NAD+ Strong / 4 vials'], ['Injectables', 'NAD+ Strong / 4 vials (alt. dosing)']],
+    'Wolverine Blend': [['Injectables', 'Wolverine Light / 2 vials'], ['Injectables', 'Wolverine Standard / 3 vials'], ['Injectables', 'Wolverine Strong / 6 vials']],
+    'Klow Blend': [['Injectables', 'Klow Blend (BPC/KPV/GHK/TB)']],
+    'SS-31': [['Injectables', 'SS-31']],
+    'PT-141': [['Injectables', 'PT-141 Injection']],
+    'Thymosin Alpha-1': [['Injectables', 'Thymosin Alpha-1 / 1 vial'], ['Injectables', 'Thymosin Alpha-1 / 3 vials']],
+    'MOTS-c': [['Injectables', 'MOTS-c / 8 kits']],
+    'Epithalon': [['Injectables', 'Epithalon']],
+    'DSIP': [['Injectables', 'DSIP Injection']],
+    'DSIP / BPC / CJC Blend': [['Injectables', 'DSIP / BPC / CJC Blend']],
+    'Kisspeptin': [['Injectables', 'Kisspeptin']],
+    'LL-37': [['Injectables', 'LL-37']],
+    'Melanotan II': [['Injectables', 'Melanotan II']],
+    'Pregnyl (HCG)': [['Injectables', 'Pregnyl (HCG) / TRT'], ['Injectables', 'Pregnyl (HCG) / Fertility or PCT']],
+    // ---- Pharmacy L duplicates (same drug as above, Pharmacy L's own vials) -----
+    // Chips are rendered from this map under an OP2-only "Pharmacy L" group.
+    'Tesamorelin (Pharmacy L)': [['Injectables', 'Tesamorelin (Pharmacy L) / 1 vial'], ['Injectables', 'Tesamorelin (Pharmacy L) / 2 vials'], ['Injectables', 'Tesamorelin (Pharmacy L) / 3 vials']],
+    'BPC-157 (Pharmacy L)': [['Injectables', 'BPC-157 Injection (Pharmacy L) / 1 vial'], ['Injectables', 'BPC-157 Injection (Pharmacy L) / 2 vials'], ['Injectables', 'BPC-157 Injection (Pharmacy L) / 3 vials']],
+    'TB-500 (Pharmacy L)': [['Injectables', 'TB-500 (Pharmacy L) / 1 vial'], ['Injectables', 'TB-500 (Pharmacy L) / 2 vials']],
+    'GHK-Cu (Pharmacy L)': [['Injectables', 'GHK-Cu Injection (Pharmacy L) / 1 vial'], ['Injectables', 'GHK-Cu Injection (Pharmacy L) / 2 vials'], ['Injectables', 'GHK-Cu Injection (Pharmacy L) / 3 vials']],
+    'MOTS-C (Pharmacy L)': [['Injectables', 'MOTS-C (Pharmacy L) / 1 vial'], ['Injectables', 'MOTS-C (Pharmacy L) / 2 vials']],
+    // Same drug, Pharmacy L's 10 mg/mL vials (v5.19.0): a separate chip because the
+    // concentration changes the units (50 units = 5 mg, not 25).
+    'MOTS-C 10mg/mL (Pharmacy L)': [['Injectables', 'MOTS-C 10mg/mL (Pharmacy L) / 2 vials'], ['Injectables', 'MOTS-C 10mg/mL (Pharmacy L) / 4 vials']],
+    'NAD+ (Pharmacy L)': [['Injectables', 'NAD+ (Pharmacy L) / 1 vial'], ['Injectables', 'NAD+ (Pharmacy L) / 2 vials'], ['Injectables', 'NAD+ (Pharmacy L) / 3 vials']],
+    'NAD Nasal Spray (Pharmacy L)': [['Oral / Topical / Nasal', 'NAD Nasal Spray (Pharmacy L) / 1 bottle'], ['Oral / Topical / Nasal', 'NAD Nasal Spray (Pharmacy L) / 2 bottles']],
+    // ---- Oral / Topical / Nasal
+    'SLU-PP-332': [['Oral / Topical / Nasal', 'SLU-PP-332 (new patient titration)'], ['Oral / Topical / Nasal', 'SLU-PP-332 200mcg (maintenance)']],
+    'AOD-9604': [['Oral / Topical / Nasal', 'AOD-9604 Troche']],
+    'O-304': [['Oral / Topical / Nasal', 'O-304 (new patient)'], ['Oral / Topical / Nasal', 'O-304 (refill)']],
+    '5-Amino-1MQ': [['Oral / Topical / Nasal', '5-Amino-1MQ Pill']],
+    'BPC-157 Pill': [['Oral / Topical / Nasal', 'BPC-157 Pill']],
+    'BPC / KPV Pill': [['Oral / Topical / Nasal', 'BPC / KPV Pill']],
+    'CJC-1295 / Ipamorelin Troche': [['Oral / Topical / Nasal', 'CJC-1295 / Ipamorelin Troche']],
+    'Dihexa': [['Oral / Topical / Nasal', 'Dihexa Pill']],
+    'DSIP Troches': [['Oral / Topical / Nasal', 'DSIP Troches']],
+    'GHK-Cu / Argireline / Leuphasyl Cream': [['Oral / Topical / Nasal', 'GHK-Cu / Argireline / Leuphasyl Cream']],
+    'Larazotide': [['Oral / Topical / Nasal', 'Larazotide']],
+    'Methylene Blue': [['Oral / Topical / Nasal', 'Methylene Blue 10mg (starting)'], ['Oral / Topical / Nasal', 'Methylene Blue 15mg (maintenance)'], ['Oral / Topical / Nasal', 'Methylene Blue 25mg (higher dose)']],
+    'NAD+ Nasal Spray': [['Oral / Topical / Nasal', 'NAD+ Nasal Spray']],
+    'Nicotine Troches': [['Oral / Topical / Nasal', 'Nicotine Troches']],
+    'NMN / Apigenin': [['Oral / Topical / Nasal', 'NMN / Apigenin Capsule']],
+    'Phentermine': [['Oral / Topical / Nasal', 'Phentermine']],
+    'PT-141 Nasal Spray': [['Oral / Topical / Nasal', 'PT-141 Nasal Spray']],
+    'Selank Nasal Spray': [['Oral / Topical / Nasal', 'Selank Nasal Spray']],
+    'Semax Nasal Spray': [['Oral / Topical / Nasal', 'Semax Nasal Spray']],
+    'Synapsin Nasal Spray': [['Oral / Topical / Nasal', 'Synapsin Nasal Spray']],
+    'Tesofensine': [['Oral / Topical / Nasal', 'Tesofensine Pill']],
+    'Thymosin Alpha-1 Nasal Spray': [['Oral / Topical / Nasal', 'Thymosin Alpha-1 Nasal Spray']],
+    // ---- Stacks (multi-med bodies; Warrior carries its own guide link)
+    'AOD-9604 + O-304 (refill)': [['Stacks', 'AOD-9604 + O-304 (refill)']],
+    '1 Month Stack': [['Stacks', '1 Month Stack (SLU-PP, AOD, O-304)']],
+    '3 Month Warrior': [['Stacks', '3 Month Warrior (SLU-PP, AOD, O-304)']],
+    '6 Month Warrior': [['Stacks', '6 Month Warrior (SLU-PP, AOD, O-304)']],
+  };
+
+  // OP2-only "Pharmacy L" chip group (2026-09-11; full catalog 2026-09-15):
+  // [chip label, shown name]. The chips are OP2-exclusive on purpose — the
+  // legacy Order Placed / Still Processing tabs keep their ORDER_ITEMS pool,
+  // while the Pharmacy L duplicates also live in Tracking & Dosing for the
+  // tracking-number message. Every chip's label MUST have an OP2_MAP entry.
+  const OP2_PHARMACYL_CHIPS = [
+    ['Tesamorelin (Pharmacy L)', 'Tesamorelin'],
+    ['BPC-157 (Pharmacy L)', 'BPC-157'],
+    ['TB-500 (Pharmacy L)', 'TB-500'],
+    ['GHK-Cu (Pharmacy L)', 'GHK-Cu'],
+    ['MOTS-C (Pharmacy L)', 'MOTS-C'],
+    ['MOTS-C 10mg/mL (Pharmacy L)', 'MOTS-C 10mg/mL'],
+    ['NAD+ (Pharmacy L)', 'NAD+'],
+    ['NAD Nasal Spray (Pharmacy L)', 'NAD Nasal Spray'],
+  ];
+
+  // Compact stack bodies for the BARE flavors (Pharmacy A / Pharmacy J). The legacy
+  // Stacks TRACKING bodies stay verbatim for every existing tab; these are the
+  // OP2-only condensed versions Jeyson approved 2026-08-28. O-304's 100 mg step
+  // always spells out the capsule math (pharmacy dispenses 50 mg caps only).
+  const OP2_SLU_BARE = [
+    'SLU-PP-332',
+    'Weeks 1-2: 100 mcg once daily AM or before exercise.',
+    'Week 3+: 200 mcg once daily. If tolerated, increase to 200 mcg twice daily (AM + early afternoon). Avoid later doses as they may disrupt sleep.',
+  ].join('\n');
+  function op2AodBare(startWeek) {
+    return [
+      'AOD-9604 Troche' + (startWeek ? ' (start week ' + startWeek + ')' : ''),
+      '600 mcg every morning fasted, dissolved between cheek and gum. Optional second dose before bed.',
+    ].join('\n');
+  }
+  function op2O304Bare(startWeek) {
+    return [
+      'O-304' + (startWeek ? ' (start week ' + startWeek + ')' : ''),
+      'Days 1-14: 50 mg every morning.',
+      'Day 15+: 100 mg (2 x 50 mg capsules) every morning.',
+    ].join('\n');
+  }
+  const OP2_BODY_BARE = {
+    'AOD-9604 + O-304 (refill)': [
+      op2AodBare(null),
+      'O-304\n100 mg (2 x 50 mg capsules) twice daily.',
+    ].join('\n\n'),
+    '1 Month Stack (SLU-PP, AOD, O-304)': [OP2_SLU_BARE, op2AodBare(null), op2O304Bare(null)].join('\n\n'),
+    '3 Month Warrior (SLU-PP, AOD, O-304)': [OP2_SLU_BARE, op2AodBare(7), op2O304Bare(7)].join('\n\n'),
+    '6 Month Warrior (SLU-PP, AOD, O-304)': [OP2_SLU_BARE, op2AodBare(9), op2O304Bare(9)].join('\n\n'),
+  };
+
+  // Chip -> SPLIT config key (for the "ships in parts" note). Only products the
+  // pharmacy splits get one.
+  function op2SplitKey(chip) {
+    const c = String(chip || '').toLowerCase();
+    // Pharmacy L tiers (1/2/3 vials) ship whole — never inherit Pharmacy A's
+    // Tesamorelin/BPC-157 split-shipment configs (2026-09-11).
+    if (c.indexOf('pharmacyl') >= 0) return null;
+    if (c.indexOf('wolverine') >= 0) return 'Wolverine Blend (BPC/TB500)';
+    if (c.indexOf('glow') >= 0) return 'Glow Blend (BPC/GHK/TB)';
+    if (c.indexOf('cjc') >= 0 && c.indexOf('troche') < 0) return 'CJC/IPA';
+    if (c.indexOf('tesamorelin') >= 0 && c.indexOf('ipamorelin') < 0) return 'Tesamorelin';
+    if (c === 'bpc-157') return 'BPC-157';
+    if (c === 'tb-500') return 'TB-500';
+    return null;
+  }
+
+  // Build a dosing leg from a TRACKING entry (med line + rx / body + note + guide).
+  function op2LegFromEntry(grp, label) {
+    const entry = TRACKING[grp] && TRACKING[grp][label];
+    if (!entry) return null;
+    let medLine, dosing;
+    if (entry.body) { medLine = null; dosing = entry.body; } // body has own "Medication:" lines
+    else { medLine = medicationLine(entry); dosing = entry.rx; }
+    const leg = {
+      label: label,
+      medLine: medLine,
+      dosing: dosing,
+      note: entry.note || null,
+      guide: entry.link || (GUIDE_DEFAULT_GROUPS.has(grp) ? GUIDE : null),
+      pharmacyj: PHARMACY_J_TRACKING.has(label),
+      pharmacyl: OP2_PHARMACYL.has(label),
+      pharmacy: op2PharmacyFor(label),
+    };
+    // Pharmacy A-flavor bare rendering data (name/conc lines, qty prefix stripped).
+    if (entry.body) {
+      leg.body = entry.body; // stacks render their prebuilt body verbatim
+    } else {
+      // Bare name: drop a leading count ("1 GHK-Cu" -> "GHK-Cu") and, when the
+      // count is followed by a container noun, that too ("8 kits of MOTS-c" ->
+      // "MOTS-c"). The space guard keeps "5-Amino-1MQ" and "100mcg and 200mcg
+      // pills of SLU-PP-332" intact.
+      if (entry.med) leg.bname = String(entry.med)
+        .replace(/^\d+\s+(?=[A-Za-z])/, '')
+        .replace(/^(?:kits?|vials?|pens?|syringes?|bottles?|boxes)\s+of\s+/i, '')
+        .trim();
+      if (entry.conc) leg.bconc = String(entry.conc).trim();
+    }
+    // Condensed body used by the BARE flavors only (legacy tabs keep entry.body).
+    if (OP2_BODY_BARE[label]) leg.bodyBare = OP2_BODY_BARE[label];
+    return leg;
+  }
+
+  // Render one leg. GLP-1 legs use medLine==='' (dosing is the med+dose chunk).
+  // Pharmacy A flavor: bare style (no "Medication:" prefix); GLP-1 legs render the
+  // 3-line med block + per-0.5mL NOTE + dose; stacks render their body verbatim.
+  function op2RenderLeg(leg, splitNote, flavor) {
+    const parts = [];
+    if (flavor.bare) {
+      if (leg.body || leg.bodyBare) {
+        // Condensed body when one exists, else the legacy body with the
+        // "Medication: " prefixes stripped (bare flavors never show them).
+        parts.push(leg.bodyBare || String(leg.body).replace(/^Medication:\s*/gm, ''));
+      } else if (leg.glp1 && leg.medBlock) {
+        const sub = [leg.medBlock];
+        if (leg.dose) sub.push(leg.dose);
+        if (leg.concNote) sub.push(leg.concNote); // NOTE sits BELOW the dose (v5.14.0)
+        parts.push(sub.join('\n\n'));
+      } else if (leg.medLine === '') {
+        parts.push(leg.dosing); // GLP-1 leg whose block could not be parsed
+      } else {
+        const sub = [];
+        if (leg.bname) sub.push(leg.bname);
+        if (leg.bconc) sub.push(leg.bconc);
+        sub.push(leg.dosing);
+        parts.push(sub.join('\n'));
+      }
+    } else {
+      if (leg.medLine === '') {
+        parts.push('Medication: ' + leg.dosing);
+      } else {
+        if (leg.medLine) parts.push('Medication: ' + leg.medLine);
+        parts.push(leg.dosing);
+      }
+    }
+    if (leg.note) parts.push('\n\n' + leg.note);
+    if (splitNote) parts.push('\n\n' + splitNote);
+    return parts.join('\n');
+  }
+
+  // Consolidated, deduped guide section. 0 links -> nothing; 1 distinct -> one
+  // "Full guide:"/"Guide:" line; 2+ -> "Guides:" block keyed by med/stack name.
+  // Pharmacy A flavor joins "Guide:" + link on ONE line; plain URLs always (the
+  // "@url:`...`" wrapper seen in early drafts is the Hermes desktop app's own
+  // link-paste markup, NOT clinic SMS syntax — stripped 2026-08-27, v5.13.1).
+  function op2GuideBlock(links, flavor) {
+    const distinct = {};
+    links.forEach(function (x) { if (x.link) (distinct[x.link] = distinct[x.link] || []).push(x.med); });
+    const keys = Object.keys(distinct);
+    if (!keys.length) return '';
+    if (keys.length === 1) return flavor.guideSingle + (flavor.guideInline ? ' ' : '\n') + keys[0];
+    return flavor.guideMulti + '\n' + keys.map(function (k) { return k + '  (' + distinct[k].join(', ') + ')'; }).join('\n');
+  }
+
+  // GLP-1 "Medication: N vial(s) of X conc (vial) = total" -> Pharmacy A 3-line block:
+  //   drug
+  //   conc without the vial size
+  //   N mL vial = total firstComponent total   (multi-vial: "N x M mL vials = ~")
+  // Multi-vial orders (calc v1.14) render the dispensed count; the legacy
+  // no-paren pack paste ("..., 2 x 2mL vials = 64mg total") folds to the same.
+  function op2Glp1MedBlock(pm) {
+    if (!pm) return null;
+    let vialM = pm.strength.match(/\(([\d.]+)\s*mL\s*vial\)\s*$/i);
+    let vialCount = pm.vials || 1;
+    let strengthSrc = pm.strength;
+    if (!vialM) {
+      const packM = strengthSrc.match(/,\s*(\d+)\s*x\s*([\d.]+)\s*mL\s*vials?\s*$/i);
+      if (packM) {
+        vialCount *= parseInt(packM[1], 10);
+        vialM = [null, packM[2]];
+        strengthSrc = strengthSrc.replace(/,\s*\d+\s*x\s*[\d.]+\s*mL\s*vials?\s*$/i, '');
+      }
+    }
+    const strength = spaceUnits(strengthSrc).replace(/\s*\(\s*[\d.]+\s*mL\s*vial\s*\)\s*$/i, '');
+    const firstComp = pm.drug.split('/')[0].trim();
+    const lines = [pm.drug, strength];
+    if (vialM) {
+      lines.push((vialCount > 1 ? vialCount + ' x ' + vialM[1] + ' mL vials' : vialM[1] + ' mL vial') +
+        ' = ' + spaceUnits(pm.total) + ' ' + firstComp + ' total');
+    } else {
+      lines.push(spaceUnits(pm.total) + ' ' + firstComp + ' total');
+    }
+    return lines.join('\n');
+  }
+
+  // Pharmacy A GLP-1 concentration note. ONLY for GLP-1s dosed per 0.5 mL — never
+  // on other injectables (their concentration is per 1 mL). Multi-vial orders
+  // (calc v1.14 — incl. the legacy no-paren pack paste) state the per-vial
+  // total; single-vial wording is unchanged.
+  function op2Glp1ConcNote(pm) {
+    if (!pm || !/0\.5\s*mL/i.test(pm.strength)) return null;
+    const packM = pm.strength.match(/,\s*(\d+)\s*x\s*[\d.]+\s*mL\s*vials?\s*$/i);
+    const vials = (pm.vials || 1) * (packM ? parseInt(packM[1], 10) : 1);
+    const totalNum = parseFloat(pm.total);
+    if (vials > 1 && !isNaN(totalNum)) {
+      return 'NOTE: Pharmacy A lists concentration per 0.5 mL, not the more common 1 mL. Each vial still contains ' +
+        spaceUnits(trimNum(totalNum / vials) + 'mg') + ' total.';
+    }
+    return 'NOTE: Pharmacy A lists concentration per 0.5 mL, not the more common 1 mL. Your vial still contains ' +
+      spaceUnits(pm.total) + ' total.';
+  }
+
+  // Pharmacy A-flavor GLP-1 dose sentence: "Inject N units (~X mg) under the skin
+  // once weekly, morning or evening." Ramps keep the full step structure.
+  function op2PharmacyADoseSentence(steps) {
+    const single = steps.length === 1;
+    const chunks = steps.map(function (s, i) {
+      const first = i === 0;
+      const last = i === steps.length - 1;
+      const mgTxt = (s.approx ? '~' : '') + trimNum(s.mg) + ' mg';
+      let when = '';
+      if (!(single && s.startWeek === 1 && !s.endWeek)) {
+        if (last && !s.endWeek) when = ' from week ' + s.startWeek + ' onward';
+        else if (s.endWeek && s.endWeek !== s.startWeek) when = ' for weeks ' + s.startWeek + ' to ' + s.endWeek;
+        else when = ' for week ' + s.startWeek;
+      }
+      return (first ? 'Inject ' : '') + s.units + ' units (' + mgTxt + ') once weekly' + when;
+    });
+    return chunks.join(', then ') + '.';
+  }
+
+  // Extract calculator dose steps from a pasted GLP-1 block (same regexes as
+  // parseGLP1) so the Pharmacy A flavor can re-render the sentence in its voice.
+  function op2Glp1Steps(raw) {
+    const steps = [];
+    const bulletRe = /^\s*-\s*(Weeks?\b.+)$/gmi;
+    let bm;
+    while ((bm = bulletRe.exec(raw)) !== null) {
+      const d = bm[0].match(CALC_DOSE_RE);
+      if (!d) continue;
+      steps.push({
+        startWeek: parseInt(d[1], 10),
+        endWeek: d[2] ? parseInt(d[2], 10) : null,
+        approx: d[3] === '~',
+        mg: parseFloat(d[4]),
+        unit: d[5].toLowerCase(),
+        units: parseFloat(d[6]),
+      });
+    }
+    return steps;
+  }
+
+  // One SHIPPING line per distinct pharmacy that has a defined line (only
+  // Pharmacy A for now). Empty when no pharmacy in the order has one.
+  function op2ShippingBlock(selected) {
+    const seen = [];
+    selected.forEach(function (s) {
+      const ph = s.leg.pharmacy || (s.leg.pharmacyj ? 'pharmacyj' : 'pharmacya');
+      if (OP2_SHIPPING[ph] && seen.indexOf(ph) < 0) seen.push(ph);
+    });
+    return seen.map(function (ph) { return 'SHIPPING: ' + OP2_SHIPPING[ph]; }).join('\n\n');
+  }
+
+  function op2SplitNote(cfg, baseDate) {
+    const offset = weeksOffsetFor(cfg.durationMonths);
+    const nextDate = addWeeks(baseDate, offset);
+    const vialWord = cfg.vials === 1 ? 'vial' : 'vials';
+    const monthWord = cfg.durationMonths === 1 ? 'month' : 'months';
+    const nextPhrase = (cfg.nextVials === cfg.vials)
+      ? 'the next shipment'
+      : 'the next ' + cfg.nextVials + ' ' + (cfg.nextVials === 1 ? 'vial' : 'vials');
+    return 'Note: this order ships in parts. This shipment has ' + cfg.vials + ' ' + vialWord +
+      ' (~' + cfg.durationMonths + ' ' + monthWord + '), and we\'ll order ' + nextPhrase +
+      ' around the week of ' + formatMonthDay(nextDate) + '. We\'ll confirm timing with you first.';
+  }
+
+  function op2ComposeMessage(firstName, selected) {
+    const anyPharmacyAStyle = selected.some(function (s) {
+      const ph = s.leg.pharmacy || (s.leg.pharmacyj ? 'pharmacyj' : 'pharmacya');
+      return ph === 'pharmacya' || ph === 'pharmacyl';
+    });
+    const allPharmacyJ = selected.length > 0 && selected.every(function (s) { return s.leg.pharmacyj; });
+    // Pharmacy A/Pharmacy L (same body, different SHIPPING line) win mixed orders;
+    // every other pharmacy (Pharmacy J, Pharmacy C, Pharmacy B, Pharmacy K, Pharmacy D...)
+    // renders the pharmacy-direct flavor. generic remains only as the
+    // empty-selection fallback.
+    const flavor = anyPharmacyAStyle ? OP2_FLAVOR.pharmacya : (selected.length ? OP2_FLAVOR.direct : OP2_FLAVOR.generic);
+    const para = flavor.fulfillment || (allPharmacyJ ? ORDER_PLACED_PHARMACY_J : FULFILLMENT.orderPlaced[fulfillmentMode()]);
+    const parts = [flavor.head.split('{NAME}').join(firstName), para];
+    const ship = op2ShippingBlock(selected);
+    if (ship) parts.push(ship);
+    parts.push(flavor.dosingHeader);
+    selected.forEach(function (s) { parts.push(op2RenderLeg(s.leg, s.splitNote, flavor)); });
+    const gb = op2GuideBlock(selected.map(function (s) { return { link: s.leg.guide, med: s.label }; }), flavor);
+    if (gb) parts.push(gb);
+    flavor.footer.forEach(function (f) { parts.push(f); });
+    // Never more than one blank line between sections (Jeyson: hates double breaks).
+    let msg = parts.join('\n\n').replace(/\n{3,}/g, '\n\n');
+    // Pharmacy A flavor only: the DOSING: header sits flush against the first leg
+    // (requested template renders "DOSING:\nTirzepatide/Cyanocobalamin").
+    if (flavor.glueDosing) msg = msg.replace('DOSING:\n\n', 'DOSING:\n');
+    return msg;
+  }
+
+  // Reusable modal: list of clickable options -> onPick(value).
+  function op2Pick(title, options, onPick) {
+    const ov = document.createElement('div'); ov.className = 'pt-overlay';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fffdf9;border-radius:8px;width:360px;max-height:72vh;overflow:auto;padding:14px;font-family:system-ui,sans-serif;box-shadow:0 8px 32px rgba(0,0,0,.25);';
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:13px;font-weight:700;margin-bottom:8px;';
+    h.textContent = title;
+    box.appendChild(h);
+    options.forEach(function (o) {
+      const b = document.createElement('button');
+      b.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 10px;margin:4px 0;border:1px solid #e3e6ea;border-radius:4px;background:#fff;font-size:12px;cursor:pointer;';
+      b.textContent = o.label;
+      b.addEventListener('click', function () { ov.remove(); onPick(o.value); });
+      box.appendChild(b);
+    });
+    const cancel = document.createElement('button');
+    cancel.style.cssText = 'width:100%;padding:7px;margin-top:8px;border:1px solid #c4c9d1;border-radius:4px;background:#f5f6f8;font-size:12px;cursor:pointer;';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', function () { ov.remove(); });
+    box.appendChild(cancel);
+    ov.appendChild(box);
+    ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+  }
+
+  // GLP-1 chip: popup paste -> parseGLP1 -> dosing leg. One merged chip covers
+  // every GLP-1 (2026-09-11); the leg label comes from the parsed Medication
+  // line so the readout/guide keys still name the drug. A "[BLRX]" source in
+  // the pasted block (Blue Five Labs / Greenstone Rx) marks the order Pharmacy L,
+  // so it claims the Pharmacy L SHIPPING line instead of Pharmacy A's.
+  function op2Glp1Flow(name, fName, onDone) {
+    const ov = document.createElement('div'); ov.className = 'pt-overlay';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fffdf9;border-radius:8px;width:420px;padding:14px;font-family:system-ui,sans-serif;box-shadow:0 8px 32px rgba(0,0,0,.25);';
+    box.innerHTML =
+      '<div style="font-size:13px;font-weight:700;margin-bottom:6px;">' + esc(name) + ': paste the GLP-1 order block</div>' +
+      '<textarea style="width:100%;box-sizing:border-box;min-height:140px;padding:8px;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;border:1px solid #c4c9d1;border-radius:4px;resize:vertical;"></textarea>' +
+      '<div style="font-size:11px;color:#a16207;min-height:14px;margin:6px 0;"></div>' +
+      '<div style="display:flex;gap:6px;">' +
+      '<button data-a style="flex:1;padding:8px;cursor:pointer;border:1px solid #2d7ff9;border-radius:4px;background:#2d7ff9;color:#fff;font-size:13px;font-weight:600;">Add to order</button>' +
+      '<button data-c style="flex:1;padding:8px;cursor:pointer;border:1px solid #c4c9d1;border-radius:4px;background:#f5f6f8;font-size:13px;">Cancel</button></div>';
+    const ta = box.querySelector('textarea');
+    const warn = box.querySelector('div[style*="min-height"]');
+    box.querySelector('[data-c]').addEventListener('click', function () { ov.remove(); });
+    box.querySelector('[data-a]').addEventListener('click', function () {
+      const raw = ta.value;
+      if (!raw.trim()) { warn.textContent = 'Paste the GLP-1 order block first.'; return; }
+      let parsed;
+      try { parsed = parseGLP1(raw, fName, ''); } catch (e) { warn.textContent = 'Parse failed: ' + (e && e.message || e); return; }
+      if (parsed.warn && parsed.warn.length) warn.textContent = 'CHECK: ' + parsed.warn.join(' | ');
+      const medMatch = raw.match(/^\s*Medication:\s*(.+)$/mi);
+      const pm = medMatch ? parseCalcMedLine(medMatch[1]) : null;
+      const steps = op2Glp1Steps(raw);
+      const dParts = String(parsed.dosing || '').split('\n');
+      const dosePart = (dParts.length > 1 ? dParts.slice(1).join('\n') : parsed.dosing) || '';
+      const pharmacyl = /\[BLRX\]|pharmacyl/i.test(raw);
+      const leg = {
+        label: (pm && pm.drug) ? pm.drug : name, medLine: '', dosing: parsed.dosing || parsed.msg || '[dosing instructions]',
+        note: null, guide: parsed.guide || GUIDE, pharmacyj: false,
+        pharmacyl: pharmacyl, pharmacy: pharmacyl ? 'pharmacyl' : 'pharmacya',
+        glp1: true,
+        medBlock: pm ? op2Glp1MedBlock(pm) : null,
+        concNote: pm ? op2Glp1ConcNote(pm) : null,
+        dose: (steps.length && steps.every(function (s) { return s.unit === 'mg'; }))
+          ? op2PharmacyADoseSentence(steps) : dosePart,
+      };
+      const splitKey = op2SplitKey(name);
+      if (splitKey && SPLIT[splitKey]) {
+        op2Pick('Split shipment: ' + name, Object.keys(SPLIT[splitKey]).map(function (l) { return { label: l, value: l }; }), function (varLabel) {
+          onDone(leg, SPLIT[splitKey][varLabel]); ov.remove();
+        });
+      } else {
+        onDone(leg, null); ov.remove();
+      }
+    });
+    ov.appendChild(box);
+    ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+    ta.focus();
+  }
+
+  // Non-GLP-1 chip: resolve to a TRACKING leg (variant picker if several),
+  // then a split-note picker if the product splits.
+  function op2EntryFlow(name, onDone) {
+    const cands = OP2_MAP[name] || [];
+    if (!cands.length) {
+      onDone({ label: name, medLine: name, dosing: '[dosing instructions]. Not found in TRACKING table', note: null, guide: null, pharmacyj: false }, null);
+      return;
+    }
+    const resolve = function (grp, label) {
+      const leg = op2LegFromEntry(grp, label);
+      if (!leg) { toast('Could not load ' + label, true); return; }
+      const splitKey = op2SplitKey(name);
+      if (splitKey && SPLIT[splitKey]) {
+        op2Pick('Split shipment: ' + name, Object.keys(SPLIT[splitKey]).map(function (l) { return { label: l, value: l }; }), function (varLabel) {
+          onDone(leg, SPLIT[splitKey][varLabel]);
+        });
+      } else {
+        onDone(leg, null);
+      }
+    };
+    if (cands.length === 1) resolve(cands[0][0], cands[0][1]);
+    else op2Pick('Choose variant: ' + name, cands.map(function (c) { return { label: c[1], value: c }; }), function (c) { resolve(c[0], c[1]); });
+  }
+
 
   // ---- FIELD EXTRACTION ----------------------------------------------------
   function readCxValue(selectors) {
@@ -1770,7 +2616,7 @@ Thank you!`;
     z-index: 2147483646; display: flex; align-items: center; justify-content: center;
   }
   .pt-panel {
-    background: var(--ds-surface, #fff); border-radius: 8px; width: 480px; max-height: 84vh;
+    background: var(--ds-surface, #fff); border-radius: 8px; width: 50vw; max-height: 84vh;
     display: flex; flex-direction: column;
     font-family: system-ui, sans-serif; color: var(--ds-text, #222);
     box-shadow: 0 8px 32px rgba(0,0,0,.25);
@@ -1830,6 +2676,8 @@ Thank you!`;
   .pt-chip.pt-on, .pt-still-chip.pt-on { background: #2d7ff9; color: #fff; border-color: #2d7ff9; }
   .pt-chip-pharmacyj-tag { font-size: 9px; color: #a16207; font-weight: 600; margin-left: 2px; }
   .pt-chip.pt-on .pt-chip-pharmacyj-tag { color: #ffe9c9; }
+  .pt-chip-pharmacyl-tag { font-size: 9px; color: #1d4ed8; font-weight: 600; margin-left: 2px; }
+  .pt-chip-op2.pt-on .pt-chip-pharmacyl-tag { color: #dbeafe; }
   .pt-placed-list, .pt-still-list {
     font-size: 13px; font-weight: 600; color: #2d7ff9;
     min-height: 18px; margin-bottom: 8px; line-height: 1.4;
@@ -1848,6 +2696,31 @@ Thank you!`;
   .pt-placed-copy, .pt-still-copy { background: #2d7ff9; color: #fff; }
   .pt-placed-copy:disabled, .pt-still-copy:disabled { background: #b9cdf7; border-color: #b9cdf7; cursor: not-allowed; }
   .pt-placed-clear, .pt-still-clear { background: #fff; color: #2d7ff9; }
+  .pt-chip-op2 {
+    display: inline-block; padding: 4px 9px; margin: 0 4px 4px 0;
+    border: 1px solid #c4c9d1; border-radius: 12px; cursor: pointer;
+    font-size: 12px; color: #333; background: #fff;
+  }
+  .pt-chip-op2:hover { border-color: #8a5f2e; background: #fdf6ee; }
+  .pt-chip-op2.pt-on { background: #8a5f2e; color: #fff; border-color: #8a5f2e; }
+  .pt-op2-list {
+    font-size: 12px; font-weight: 600; color: #8a5f2e;
+    min-height: 18px; margin-bottom: 8px; line-height: 1.4;
+  }
+  .pt-op2-preview {
+    width: 100%; box-sizing: border-box; min-height: 150px;
+    padding: 8px; font-size: 12px; line-height: 1.5; resize: vertical;
+    border: 1px solid #c4c9d1; border-radius: 4px;
+    font-family: system-ui, sans-serif; background: #fafbfc; color: #333;
+  }
+  .pt-op2-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .pt-op2-copy, .pt-op2-clear {
+    flex: 1; padding: 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+    border-radius: 4px; border: 1px solid #8a5f2e;
+  }
+  .pt-op2-copy { background: #8a5f2e; color: #fff; }
+  .pt-op2-copy:disabled { background: #cbb79e; border-color: #cbb79e; cursor: not-allowed; }
+  .pt-op2-clear { background: #fff; color: #8a5f2e; }
   .pt-foot { padding: 0 18px 14px; }
   .pt-close {
     width: 100%; padding: 7px; cursor: pointer;
@@ -1937,6 +2810,7 @@ Thank you!`;
 
     html += '<div class="pt-tabs">' +
       '<div class="pt-tab pt-active" data-pane="unified">Unified Parser</div>' +
+      '<div class="pt-tab pt-tab-op2" data-pane="op2">Order Placed 2.0</div>' +
       '<div class="pt-tab" data-pane="placed">Order Placed</div>' +
       '<div class="pt-tab" data-pane="still">Still Processing</div>' +
       '<div class="pt-tab" data-pane="tracking">Tracking &amp; Dosing</div>' +
@@ -1962,6 +2836,42 @@ Thank you!`;
       }
       html += '</div>';
     }
+    html += '</div>';
+
+    // Order Placed 2.0 pane (NEW 2026-08-26 — combined order-placed + dosing)
+    html += '<div class="pt-pane" data-pane="op2">' +
+      '<div class="pt-op2-list">Click products to build the order. GLP-1s prompt for the dose block; split-shipment products prompt for the shipment. No tracking numbers.</div>' +
+      '<textarea class="pt-op2-preview" readonly placeholder="Your combined order-placed + dosing message will appear here."></textarea>' +
+      '<div class="pt-op2-actions">' +
+      '<button class="pt-op2-copy" disabled>Copy Message</button>' +
+      '<button class="pt-op2-clear">Clear</button>' +
+      '</div>';
+    for (const [grp, names] of Object.entries(ORDER_ITEMS)) {
+      html += '<div class="pt-group" style="margin-top:10px;"><div class="pt-group-title">' + esc(grp) + '</div>';
+      // One merged GLP-1 chip replaces the three per-drug chips (2026-09-11).
+      if (grp === 'Injectables') {
+        html += '<span class="pt-chip-op2" data-op2="GLP-1" data-name="GLP-1">GLP-1 (Semaglutide / Tirzepatide / Retatrutide)</span>';
+      }
+      for (const name of names) {
+        if (GLP1_LEGACY_CHIPS.has(name)) continue; // legacy tabs only
+        html += '<span class="pt-chip-op2" data-op2="' + esc(name) + '" data-name="' + esc(name) + '">' + esc(name) + '</span>';
+      }
+      html += '</div>';
+    }
+    html += '<div class="pt-group"><div class="pt-group-title">Stacks</div>' +
+      '<span class="pt-chip-op2" data-op2="AOD-9604 + O-304 (refill)" data-name="AOD-9604 + O-304 (refill)">AOD-9604 + O-304 (refill)</span>' +
+      '<span class="pt-chip-op2" data-op2="1 Month Stack" data-name="1 Month Stack">1 Month Stack</span>' +
+      '<span class="pt-chip-op2" data-op2="3 Month Warrior" data-name="3 Month Warrior">3 Month Warrior</span>' +
+      '<span class="pt-chip-op2" data-op2="6 Month Warrior" data-name="6 Month Warrior">6 Month Warrior</span>' +
+      '</div>';
+    // Pharmacy L duplicates (2026-09-11) — OP2-only chips, badged so the
+    // fulfilling pharmacy is obvious next to the Pharmacy A copies above.
+    html += '<div class="pt-group"><div class="pt-group-title">Pharmacy L</div>' +
+      OP2_PHARMACYL_CHIPS.map(function (c) {
+        return '<span class="pt-chip-op2" data-op2="' + esc(c[0]) + '" data-name="' + esc(c[0]) + '">' +
+          esc(c[1]) + ' <span class="pt-chip-pharmacyl-tag">Pharmacy L</span></span>';
+      }).join('') +
+      '</div>';
     html += '</div>';
 
     // Still Processing pane (multi-select, mirrors Order Placed)
@@ -2002,6 +2912,9 @@ Thank you!`;
         let suffix = flagged ? ' <span style="color:#b45309;font-size:11px;">check dose</span>' : '';
         if (PHARMACY_J_TRACKING.has(label)) {
           suffix += ' <span style="color:#a16207;font-size:11px;">Pharmacy J</span>';
+        }
+        if (OP2_PHARMACYL.has(label)) {
+          suffix += ' <span style="color:#1d4ed8;font-size:11px;">Pharmacy L</span>';
         }
         html += '<div class="pt-item' + flagged + '" data-kind="tracking" data-grp="' + esc(grp) +
           '" data-var="' + esc(label) + '">' + esc(label) + suffix + '</div>';
@@ -2204,6 +3117,82 @@ Thank you!`;
       stillSync();
     });
 
+    // ---- ORDER PLACED 2.0 (NEW tab) ---------------------------------------
+    const op2List = panel.querySelector('.pt-op2-list');
+    const op2Preview = panel.querySelector('.pt-op2-preview');
+    const op2Copy = panel.querySelector('.pt-op2-copy');
+    const op2Clear = panel.querySelector('.pt-op2-clear');
+    const op2Chips = Array.from(panel.querySelectorAll('.pt-chip-op2'));
+    const op2 = { selected: [] };
+
+    function op2Sync() {
+      op2List.textContent = op2.selected.length
+        ? 'Selected: ' + op2.selected.map(function (s) { return s.label; }).join(' + ')
+        : 'Click products to build the order. GLP-1s prompt for the dose block; split-shipment products prompt for the shipment. No tracking numbers.';
+      op2Preview.value = op2.selected.length ? op2ComposeMessage(firstName, op2.selected) : '';
+      op2Copy.disabled = op2.selected.length === 0;
+    }
+
+    function op2Add(key, name, leg, splitCfg) {
+      let splitNote = null;
+      if (splitCfg) {
+        const parts = (dateInput.value || '').split('-');
+        const base = parts.length === 3 ? new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])) : new Date();
+        splitNote = op2SplitNote(splitCfg, base);
+      }
+      op2.selected.push({ key: key, label: name, leg: leg, splitNote: splitNote });
+      op2Chips.forEach(function (c) { if (c.dataset.op2 === key) c.classList.add('pt-on'); });
+      op2Sync();
+    }
+
+    op2Chips.forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        const key = chip.dataset.op2;
+        const name = chip.dataset.name;
+        // Merged GLP-1 chip (v5.17.0): APPEND-ONLY. Every click pastes another
+        // calculator block and adds another GLP-1 leg (Jeyson 2026-09-11); the
+        // chip has no toggle-off — Clear removes the whole order.
+        if (GLP1_CHIPS.has(name)) {
+          op2Glp1Flow(name, firstName, function (leg, splitCfg) {
+            op2Add(key, (leg && leg.label) ? leg.label : name, leg, splitCfg);
+          });
+          return;
+        }
+        const idx = op2.selected.findIndex(function (s) { return s.key === key; });
+        if (idx >= 0) {
+          op2.selected.splice(idx, 1);
+          chip.classList.remove('pt-on');
+          op2Sync();
+          return;
+        }
+        op2EntryFlow(name, function (leg, splitCfg) {
+          op2Add(key, name, leg, splitCfg);
+          if (!leg || /not found/.test(leg.dosing)) {
+            toast('⚠ ' + name + ' has no dosing on file — placeholder added. Check before sending.', true, 5000);
+          }
+        });
+      });
+    });
+
+    op2Copy.addEventListener('click', function () {
+      if (!op2.selected.length) return;
+      const msg = op2ComposeMessage(firstName, op2.selected);
+      copyText(msg).then(
+        function () {
+          toast('Copied: Order placed + dosing (' + op2.selected.length + ' meds)');
+          overlay.remove();
+        },
+        function () { toast('Copy failed, check console', true); console.log(msg); }
+      );
+    });
+
+    op2Clear.addEventListener('click', function () {
+      op2.selected.length = 0;
+      op2Chips.forEach(function (c) { c.classList.remove('pt-on'); });
+      op2Sync();
+    });
+    op2Sync();
+
     panel.querySelectorAll('.pt-item').forEach(function (el) {
       el.addEventListener('click', function () {
         let msg, label;
@@ -2222,7 +3211,8 @@ Thank you!`;
         } else {
           const entry = TRACKING[el.dataset.grp][el.dataset.var];
           msg = buildTrackingMessage(entry, firstName, trackInput.value, careInput.checked, el.dataset.grp, el.dataset.var);
-          label = el.dataset.var + (PHARMACY_J_TRACKING.has(el.dataset.var) ? ' (Pharmacy J)' : '');
+          label = el.dataset.var + (PHARMACY_J_TRACKING.has(el.dataset.var) ? ' (Pharmacy J)' : '') +
+            (OP2_PHARMACYL.has(el.dataset.var) ? ' (Pharmacy L)' : '');
           if (entry.flags && entry.flags.length) {
             label += ' :: CHECK DOSE: ' + entry.flags.join(' | ');
             console.warn('[Rx Templates] ' + el.dataset.var, entry.flags);

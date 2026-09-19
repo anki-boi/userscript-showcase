@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho Task Update + Due Date Branching Menu
 // @namespace    http://tampermonkey.net/
-// @version      2.7
+// @version      2.15
 // @author       Jeyson Dagondon
 // @description  Adds Task Update and Set Due Date branching menus to the Zoho task 3-dot popover
 // @match        https://crm.zoho.com/*
@@ -12,11 +12,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TaskMenu v2.7] boot');
+console.info('[TaskMenu v2.15] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Menu', version: '2.7', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Menu', version: '2.15', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -57,9 +57,10 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
     return d;
   }
 
-  function computeDueDate(option) {
-    const d = new Date();
+  function computeDueDate(option, today) {
+    const d = today ? new Date(today.getTime()) : new Date();
     d.setHours(0, 0, 0, 0);
+    if (option.type === 'today') return d; // Set Due Date -> Today: exact date, no weekend roll
     if (option.type === 'business') {
       let added = 0;
       while (added < option.n) {
@@ -198,19 +199,17 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
       "No payment yet": { tpl: `[date] no payment yet [initials]` },
       "No Nth payment yet": { tpl: `[date] no [ordinal] payment yet [initials]` },
       "PPW not yet signed": { tpl: `[date] PPW not yet signed [initials]` },
+      "Questionnaire sent to patient": { tpl: `[date] questionnaire sent to patient [initials]` },
     },
     "Next Vial Confirmation": {
       "Sent SMS - can receive?": { tpl: `[date] sent sms if Pt can rcv [initials]` },
-      "No reply from SMS yet": { tpl: `[date] no reply from sms yet [initials]` },
     },
     "Labs": {
       "No labs yet": { tpl: `[date] no labs yet [initials]` },
       "No labs yet - reminder triggered": { tpl: `[date] no labs yet, triggered the reminder automation [initials]` },
-      "Still no labs": { tpl: `[date] still no labs [initials]` },
       "Partials are in": { tpl: `[date] partials are in [initials]` },
       "Labs on requisition ready": { tpl: `[date] labs still on requisition ready [initials]` },
       "Labs sent to Laura": { tpl: `[date] labs sent to Laura [initials]` },
-      "Waiting for Laura's approval": { tpl: `[date] waiting for Laura's approval [initials]` },
       "Good to order": { tpl: `[date] Good to order [initials]` },
     },
     "Med Call": {
@@ -239,6 +238,7 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
   // DUE DATE OPTIONS
   // ================================================================
   const DUE_DATE_OPTIONS = {
+    "Today":            { type: 'today' },
     "+1 business day":  { type: 'business', n: 1 },
     "+2 business day":  { type: 'business', n: 2 },
     "+3 business days": { type: 'business', n: 3 },
@@ -258,10 +258,74 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
     "12 weeks": { type: 'calendar', n: 84 },
   };
 
+  // Auto due-date applied when a matching task update is saved.
+  // Key = "<Category>::<Label>" (must match TASK_UPDATE_TEMPLATES).
+  // n:0 entries are placeholders — they stamp today's date (no weekend roll).
+  // Fill in real { type, n } values as the workflow requires.
+  const AUTO_DUE_DATE = {
+    'Payment & Admin::No payment yet':                 { type: 'business', n: 2 },
+    'Payment & Admin::No Nth payment yet':             { type: 'business', n: 2 },
+    'Payment & Admin::PPW not yet signed':             { type: 'business', n: 1 },
+    'Payment & Admin::Questionnaire sent to patient':  { type: 'business', n: 1 },
+    'Next Vial Confirmation::Sent SMS - can receive?': { type: 'business', n: 1 },
+    'Labs::No labs yet':                               { type: 'calendar', n: 7 },
+    'Labs::No labs yet - reminder triggered':          { type: 'calendar', n: 7 },
+    'Labs::Partials are in':                           { type: 'business', n: 3 },
+    'Labs::Labs on requisition ready':                 { type: 'calendar', n: 14 },
+    'Labs::Labs sent to Laura':                        { type: 'business', n: 0 },
+    'Labs::Good to order':                             { type: 'business', n: 0 },
+    'Med Call::No show on med call':                   { type: 'business', n: 0 },
+    'Med Call::Check for updates':                     { type: 'business', n: 0 },
+    'Refills::Refill - sent SMS':                      { type: 'business', n: 1 },
+    'Refills::Refill - with management plan':          { type: 'business', n: 1 },
+    'Refills::Refill - eligible for new Rx':           { type: 'business', n: 1 },
+    'Refills::Continue - needs new plan':              { type: 'business', n: 1 },
+    'Shipping::Ship on/within date range':             { type: 'business', n: 1 },
+    'Shipping::Pt out of town':                        { type: 'business', n: 1 },
+  };
+
+  // ================================================================
+  // CROSS-TAB INTENT (Zoho now opens task edit in a NEW TAB, 2026-09)
+  // ================================================================
+  // The pick (template text + auto due date, or a due-date option) is stored
+  // in localStorage BEFORE clicking Zoho's Edit. If Zoho opens the edit inline
+  // (popup in this tab), this tab clears the intent and runs the old flow. If
+  // Zoho opens a NEW TAB (/tab/Tasks/<id>/edit), the intent stays pending and
+  // the new tab's script instance consumes it at boot (consumePendingIntent).
+  const INTENT_KEY = 'tmTaskEditIntent';
+  const INTENT_TTL_MS = 90 * 1000;
+
+  function readPendingIntent() {
+    try {
+      const raw = localStorage.getItem(INTENT_KEY);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o || !o.id || Date.now() - o.ts > INTENT_TTL_MS) {
+        localStorage.removeItem(INTENT_KEY);
+        return null;
+      }
+      return o;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writePendingIntent(intent) {
+    const rec = Object.assign({}, intent);
+    if (!rec.id) rec.id = 'tm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    if (!rec.ts) rec.ts = Date.now();
+    try { localStorage.setItem(INTENT_KEY, JSON.stringify(rec)); } catch (e) {}
+    return rec;
+  }
+
+  function clearPendingIntent() {
+    try { localStorage.removeItem(INTENT_KEY); } catch (e) {}
+  }
+
   // ================================================================
   // FLOW: click Edit -> prompt -> paste -> save
   // ================================================================
-  async function pasteAndSave(text) {
+  async function pasteAndSave(text, autoDate) {
     const saveBtn = document.querySelector('#saveTasksBtn');
     if (!saveBtn) {
       alert('Save button disappeared. Try again.');
@@ -278,29 +342,88 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
     const prefix = existing.length ? existing.replace(/\s*$/, '') + '\n' : '';
     setFieldValue(descBox, prefix + text);
 
+    let dueStr = null;
+    if (autoDate) {
+      const field = document.querySelector('#Crm_Tasks_DUEDATE');
+      if (field) {
+        dueStr = formatZohoDate(computeDueDate(autoDate));
+        setDueDateField(field, dueStr);
+      } else {
+        console.warn('[TaskMenu] auto due-date requested but #Crm_Tasks_DUEDATE not found');
+      }
+    }
+
     await new Promise((r) => setTimeout(r, 600));
     saveBtn.click();
-    if (typeof showToast === 'function') showToast('✅ Task update saved');
+    if (typeof showToast === 'function') showToast(dueStr ? '✅ Task update saved · due ' + dueStr : '✅ Task update saved');
   }
 
-  async function triggerEditAndPaste(entry, editAnchor) {
+  // Applies a Task Update pick once the edit form is confirmed in THIS tab
+  // (inline path). The old triggerEditAndPaste body, minus click/wait/settle.
+  async function runInlineUpdate(entry, autoDate) {
+    const text = await fillTemplate(entry.tpl, entry);
+    if (text === null) return; // cancelled; form stays open for manual close
+    await pasteAndSave(text, autoDate);
+  }
+
+  // Stores the pick as a pending intent, clicks Zoho's Edit anchor, then
+  // dispatches: inline form in this tab -> run here; no inline form -> the
+  // edit was opened in a NEW TAB (Zoho 2026-09) and the intent is consumed
+  // there at boot. The page's window.open is invisible to this @grant sandbox,
+  // so the new-tab branch is detected by absence of the inline form (verified
+  // 2026-09: probe userscript wrapper never saw page-context opens).
+  async function dispatchEditPick(intent, editAnchor, runInline) {
     const oldBox = document.querySelector('#Crm_Tasks_DESCRIPTION');
     if (oldBox) oldBox.id = 'Crm_Tasks_DESCRIPTION_stale';
+    const oldField = document.querySelector('#Crm_Tasks_DUEDATE');
+    if (oldField) oldField.id = 'Crm_Tasks_DUEDATE_stale';
+
+    let taskId = null;
+    try { taskId = JSON.parse(editAnchor.getAttribute('data-params') || '{}').id || null; } catch (e) { /* keep null */ }
+    const rec = writePendingIntent(Object.assign({ taskId }, intent));
 
     editAnchor.click();
 
-    try {
-      await waitForElement('#saveTasksBtn');
-    } catch (e) {
-      alert('Edit form did not load. Try again.');
+    let inline = null;
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline && !inline) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (!inline) inline = document.getElementById('saveTasksBtn');
+    }
+
+    if (inline) {
+      clearPendingIntent(); // this tab owns the pick; a parallel new tab must not double-run
+      await new Promise((r) => setTimeout(r, 2400)); // let Zoho hydrate the edit form
+      await runInline();
       return;
     }
-    await new Promise((r) => setTimeout(r, 2400));
 
-    const text = await fillTemplate(entry.tpl, entry);
-    if (text === null) return; // cancelled; form stays open for manual close
+    // No inline form in this tab -> Zoho opened the edit in a NEW TAB: leave
+    // the intent pending for that tab's boot consumer. Drop it if nothing
+    // claims it within 50s (tab closed early / script error) so it can't
+    // hijack a later manual edit of the same task.
+    console.info('[TaskMenu] no inline edit form; intent left for new-tab consumer', intent.kind);
+    setTimeout(() => {
+      const cur = readPendingIntent();
+      if (cur && cur.id === rec.id && cur.status !== 'claimed') clearPendingIntent();
+    }, 50 * 1000);
+  }
 
-    await pasteAndSave(text);
+  async function triggerEditAndPaste(entry, editAnchor, autoDate) {
+    await dispatchEditPick(
+      { kind: 'update', tpl: entry.tpl, rangeTitle: entry.rangeTitle || null, autoDate: autoDate || null },
+      editAnchor,
+      () => runInlineUpdate(entry, autoDate)
+    );
+  }
+
+  function setDueDateField(field, dateStr) {
+    field.focus();
+    field.value = dateStr;
+    field.setAttribute('aria-valuenow', dateStr);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    field.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
   // ================================================================
@@ -323,23 +446,47 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
       return;
     }
 
-    field.focus();
-    field.value = dateStr;
-    field.setAttribute('aria-valuenow', dateStr);
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-    field.dispatchEvent(new Event('change', { bubbles: true }));
-    field.dispatchEvent(new Event('blur', { bubbles: true }));
+    setDueDateField(field, dateStr);
 
     await new Promise((r) => setTimeout(r, 600));
     saveBtn.click();
     if (typeof showToast === 'function') showToast('✅ Due date set: ' + dateStr);
   }
 
-  function triggerEditAndSetDate(option, editAnchor) {
-    const oldField = document.querySelector('#Crm_Tasks_DUEDATE');
-    if (oldField) oldField.id = 'Crm_Tasks_DUEDATE_stale';
-    editAnchor.click();
-    setTimeout(() => setDueDateAndSave(option), 2400);
+  async function triggerEditAndSetDate(option, editAnchor) {
+    await dispatchEditPick(
+      { kind: 'dueDate', option: option },
+      editAnchor,
+      () => setDueDateAndSave(option)
+    );
+  }
+
+  // Boot-time consumer: if THIS page hosts the pending task edit (i.e. Zoho
+  // opened the edit in this new tab), apply the stored pick and save it.
+  async function consumePendingIntent() {
+    // Top frame only: Zoho mirrors the route in same-origin ghost iframes and
+    // TM injects into each — a ghost frame with its own #saveTasksBtn must not
+    // claim/apply the intent (verified 2026-09: 3 v2.13 boots across 2 frames).
+    if (window.self !== window.top) return;
+    const first = readPendingIntent();
+    if (!first || first.status === 'claimed') return;
+    // Only wait for the form when an intent is actually pending (new-tab case).
+    let host = null;
+    try { host = await waitForElement('#saveTasksBtn', 8000); } catch (e) { /* not an edit host */ }
+    if (!host) return;
+    const intent = readPendingIntent(); // re-read: may have been claimed/cleared meanwhile
+    if (!intent || intent.status === 'claimed' || intent.id !== first.id) return;
+    const m = /\/tab\/Tasks\/(\d+)/.exec(location.pathname);
+    if (intent.taskId && m && m[1] !== String(intent.taskId)) return; // different task's edit page
+    writePendingIntent(Object.assign({}, intent, { status: 'claimed' }));
+    await new Promise((r) => setTimeout(r, 2400));
+    if (intent.kind === 'update') {
+      const text = await fillTemplate(intent.tpl, { rangeTitle: intent.rangeTitle || null });
+      if (text !== null) await pasteAndSave(text, intent.autoDate || null);
+    } else if (intent.kind === 'dueDate') {
+      await setDueDateAndSave(intent.option);
+    }
+    clearPendingIntent();
   }
 
   // ================================================================
@@ -375,6 +522,28 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
     el.addEventListener('mouseleave', () => (el.style.background = ''));
   }
 
+  // v2.12: pulsing amber glow for Task Update options whose due-date bump is
+  // >= 1 day (see AUTO_DUE_DATE) — the clicker sees the day count BEFORE clicking.
+  function ensureAutoDateStyle() {
+    if (document.getElementById('tm-auto-date-style')) return;
+    const st = document.createElement('style');
+    st.id = 'tm-auto-date-style';
+    st.textContent = `
+      .tm-auto-date {
+        color: var(--ds-warn,#a16207);
+        font-weight: 700;
+        font-size: 11px;
+        margin-left: 5px;
+        animation: tmAutoGlow 1.6s ease-in-out infinite;
+      }
+      @keyframes tmAutoGlow {
+        0%, 100% { text-shadow: 0 0 2px rgba(161,98,7,0.25); }
+        50%      { text-shadow: 0 0 8px rgba(161,98,7,0.85); }
+      }
+    `;
+    document.head.appendChild(st);
+  }
+
   // Categorized submenu (Task Updates)
   function buildSubmenu(groupObj, onPick) {
     const wrap = document.createElement('li');
@@ -385,6 +554,7 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
 
     const flyout = document.createElement('ul');
     styleFlyout(flyout, '260px');
+    ensureAutoDateStyle();
 
     for (const [category, items] of Object.entries(groupObj)) {
       const header = document.createElement('li');
@@ -401,11 +571,22 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
 
       for (const [label, entry] of Object.entries(items)) {
         const opt = document.createElement('li');
-        opt.textContent = label;
+        const autoDate = AUTO_DUE_DATE[category + '::' + label] || null;
+        // v2.12: show HOW MANY DAYS the due date moves (+N), not a generic
+        // "auto-date" word. n=0 entries are skipped — the date doesn't actually
+        // move, so a hint would make no sense (Jeyson 2026-08-25).
+        if (autoDate && autoDate.n >= 1) {
+          const dueStr = formatZohoDate(computeDueDate(autoDate));
+          const unit = autoDate.type === 'business' ? 'business day' : 'day';
+          const badge = `⚡ +${autoDate.n} ${unit}${autoDate.n > 1 ? 's' : ''}`;
+          opt.innerHTML = `<span style="color:var(--ds-warn,#a16207);">${label}</span><span class="tm-auto-date" title="Auto-sets due date to ${dueStr}">${badge}</span>`;
+        } else {
+          opt.textContent = label;
+        }
         styleOption(opt, '20px');
         opt.addEventListener('click', (e) => {
           e.stopPropagation();
-          onPick(entry);
+          onPick(entry, category, label);
         });
         flyout.appendChild(opt);
       }
@@ -455,8 +636,9 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
     const editAnchor = popoverUl.querySelector('a[data-cid="editbtn"]');
     if (!editAnchor) return;
 
-    const submenu = buildSubmenu(TASK_UPDATE_TEMPLATES, (entry) => {
-      triggerEditAndPaste(entry, editAnchor);
+    const submenu = buildSubmenu(TASK_UPDATE_TEMPLATES, (entry, category, label) => {
+      const autoDate = AUTO_DUE_DATE[category + '::' + label] || null;
+      triggerEditAndPaste(entry, editAnchor, autoDate);
     });
     editAnchor.after(submenu);
 
@@ -475,4 +657,8 @@ window.__scripts['TaskMenu'] = { name: 'Zoho Task Update + Due Date Branching Me
     childList: true,
     subtree: true,
   });
+
+  // New-tab host consumer: Zoho (2026-09) opens task edits in a new tab
+  // (/tab/Tasks/<id>/edit); if this page is that host, apply the pending pick.
+  consumePendingIntent();
 })();

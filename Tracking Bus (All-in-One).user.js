@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tracking Bus (All-in-One)
 // @namespace    showcase-trackbus
-// @version      2.33
+// @version      2.35
 // @author       Jeyson Dagondon
 // @description  Fetch blank days (configurable), parse rows, auto-open UPS/FedEx, extract DS+TN
 // @match        https://docs.google.com/spreadsheets/*
@@ -19,13 +19,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TrackBus v2.33] boot');
+console.info('[TrackBus v2.35] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['TrackBus'] = {
   name: 'Tracking Bus (All-in-One)',
-  version: '2.33',
+  version: '2.35',
   state: 'idle',
   message: '',
   progress: null,
@@ -79,13 +79,8 @@ window.__scripts['TrackBus'] = {
     GM_setValue('tb:' + tn, JSON.stringify({ date: date, carrier: carrier, ts: Date.now() }));
     var close = function () {
       toast('✓ Tracking copied', true);
-      // v2.31 (Jeyson): one-tab-at-a-time runs REUSE this tab — while the
-      // sheet's tb:seq flag is set, do NOT self-close (the controller
-      // navigates this tab to the next TN and closes it at run end).
-      // Manual opens (flag unset) still close as before.
-      var seqMode = false;
-      try { seqMode = GM_getValue('tb:seq', 0) === 1; } catch (e) { seqMode = false; }
-      if (!seqMode) setTimeout(function () { window.close(); }, 700);
+      // v2.34 (Jeyson): no self-close, ever — the tab stays open and the
+      // user closes it (matches the standalone UPS/FedEx copiers).
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(close)
@@ -240,31 +235,73 @@ window.__scripts['TrackBus'] = {
   function runUPS() {
     var done = false;
 
-    function extract() {
-      var tnEl = document.querySelector(
-        'span.mb-0.ups-txt-black.ups-txt_size_md.ups-txt-weight_medium');
-      var trackingNum = tnEl ? tnEl.textContent.trim() : null;
-      if (!trackingNum) {
-        var m = location.href.match(/trackNums=(1Z[A-Z0-9]+)/i);
-        if (m) trackingNum = m[1];
+    // v2.35 (2026-09-11): UPS dropped the `mb-0` utility class from the
+    // tracking-number span (it now ships `pr-1`, verified live) — the old
+    // `span.mb-0.ups-txt-black...` selector matched NOTHING, so every UPS row
+    // failed and never published its tb:<tn> payload to the sheet controller.
+    // Match the STABLE ups-txt-* classes only, then the URL param (our own
+    // links use ?trackNums=, UPS email links ?tracknum= — the old regex only
+    // accepted the plural), then the rendered page text. Never put a
+    // margin/padding utility class back into this selector.
+    function tnFromPage() {
+      var cands = document.querySelectorAll(
+        'span.ups-txt-black.ups-txt_size_md.ups-txt-weight_medium,' +
+        'span[class*="ups-txt-weight_medium"].ups-txt-black');
+      for (var i = 0; i < cands.length; i++) {
+        var t = (cands[i].textContent || '').trim();
+        if (/^1Z[0-9A-Z]{16}$/i.test(t)) return t.toUpperCase();
       }
-      var billedEl = document.querySelector('#stApp_txtAdditionalInfoBilledOn');
-      var billedRaw = billedEl ? billedEl.textContent.trim() : null;
-      if (!trackingNum || !billedRaw) return null;
-      var p = billedRaw.split('/');
-      if (p.length !== 3) return null;
-      return {
-        tn: trackingNum,
-        date: parseInt(p[0], 10) + '/' + parseInt(p[1], 10) + '/' + p[2].slice(-2)
-      };
+      var m = location.href.match(/[?&]trackNums?=([^&#]+)/i);
+      if (m) {
+        var u = m[1];
+        try { u = decodeURIComponent(u); } catch (e) { /* keep raw */ }
+        u = u.trim();
+        if (/^1Z[0-9A-Z]{16}$/i.test(u)) return u.toUpperCase();
+      }
+      var b = (document.body ? document.body.innerText : '').match(/\b1Z[0-9A-Z]{16}\b/i);
+      return b ? b[0].toUpperCase() : '';
+    }
+
+    // Same drift class as the tracking number: keep the id fast path, but fall
+    // back to the "Shipped / Billed On" label's own date if the id rotates.
+    function shippedDateFromPage() {
+      var raw = (document.querySelector('#stApp_txtAdditionalInfoBilledOn') || {}).textContent || '';
+      raw = raw.trim();
+      if (!raw) {
+        var all = document.querySelectorAll('strong,span,p,div,label,dt,dd');
+        for (var i = 0; i < all.length; i++) {
+          if (all[i].children.length) continue;
+          if (!/^shipped\s*\/?\s*billed\s*on$/i.test((all[i].textContent || '').trim())) continue;
+          var scope = all[i].parentElement || all[i];
+          var mm = (scope.innerText || scope.textContent || '').match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+          if (mm) { raw = mm[1]; break; }
+        }
+      }
+      var p = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+      return p ? parseInt(p[1], 10) + '/' + parseInt(p[2], 10) + '/' + p[3].slice(-2) : '';
     }
 
     function go() {
       if (done) return;
       done = true;
-      var r = extract();
-      if (!r) { LOG('ups FAIL'); toast('No tracking data found', false); return; }
-      publish(r.tn, r.date, 'UPS');
+      var trackingNum = tnFromPage();
+      var date = shippedDateFromPage();
+      if (!trackingNum || !date) {
+        // v2.35: name the extractor AND the failing half — the old generic
+        // "No tracking data found" toast left no way to tell WHICH tracking
+        // script was complaining (2026-09-11).
+        var why = !trackingNum
+          ? 'no tracking number found on this UPS page'
+          : 'tracking number ' + trackingNum + ' found, but the shipped date did not render';
+        LOG('ups FAIL', why);
+        try {
+          var a = window.__scripts['TrackBus'];
+          a.state = 'error'; a.error = why; a.message = why; a.lastActivity = Date.now();
+        } catch (e) { LOG('api error set failed', e); }
+        toast('⚠ Tracking Bus UPS: ' + why, false);
+        return;
+      }
+      publish(trackingNum, date, 'UPS');
     }
 
     // v2.4: observe documentElement — document.body is NULL at document-start,
@@ -762,9 +799,9 @@ window.__scripts['TrackBus'] = {
        for the previous extraction before the next opens. The first
        open rides the click's user gesture; every later item NAVIGATES
        the same tab (navigation is never popup-blocked, unlike a fresh
-       window.open after an await). The extractor skips its self-close
-       while the tb:seq flag is set, so the tab survives for reuse;
-       the controller closes it at run end.
+       window.open after an await). v2.34: the extractor never self-closes
+       and the controller leaves the tab open at run end — the user closes
+       it. The tb:seq flag is still set/cleared for run bookkeeping.
        ============================================================ */
     var tbCarrierWin = null;
     var tbExtractBusy = false;
@@ -779,11 +816,10 @@ window.__scripts['TrackBus'] = {
     }
 
     function closeTbTab() {
+      // v2.34 (Jeyson): no auto-close — the carrier tab stays open after
+      // the run; the user closes it. Keep the handle (don't null it) so
+      // the NEXT run reuses/navigates the same tab as before.
       try { GM_deleteValue('tb:seq'); } catch (e) { LOG('closeTbTab delete', e); }
-      if (tbCarrierWin && !tbCarrierWin.closed) {
-        try { tbCarrierWin.close(); } catch (e) { LOG('closeTbTab close', e); }
-      }
-      tbCarrierWin = null;
     }
 
     function awaitTb(it, timeoutMs) {
@@ -848,7 +884,7 @@ window.__scripts['TrackBus'] = {
 
     /* ============================================================
        LIFEFILE ORDER FETCH (v2.18) — Jeyson's flow
-       On the pharmacy subtab (renamed Pharmacy A/Progress/Pharmacy C/
+       On the pharmacy subtab (renamed Pharmacy A/Pharmacy B/Pharmacy C/
        Pharmacy D...), click Fetch: the portal tab opens with an lfSale
        intent, the Session Handler auto-logs in, the Order Status
        Extractor sets the configurable blank-days filter and copies
@@ -928,7 +964,7 @@ window.__scripts['TrackBus'] = {
         tries++;
         var k = detectPharmacyFromTab();
         if (k) { doLifeFileFetch(k, days); return; }
-        if (tries >= 8) { toast('Rename this tab to a pharmacy (Pharmacy A, Progress, Pharmacy C, Pharmacy D…)', false); return; }
+        if (tries >= 8) { toast('Rename this tab to a pharmacy (Pharmacy A, Pharmacy B, Pharmacy C, Pharmacy D…)', false); return; }
         setTimeout(waitPharm, 400);
       })();
     }

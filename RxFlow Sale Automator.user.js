@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RxFlow Sale Automator
 // @namespace    jeyson-sale-automator
-// @version      2.16
+// @version      2.19
 // @author       Jeyson Dagondon
 // @description  Auto-drive RxFlow sales from CSV/JSON rows: lookup, consent, products
 // @match        https://staff.exampleclinic.com/*
@@ -11,13 +11,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[PSA v2.16] boot');
+console.info('[PSA v2.19] boot');
 
 // --- Script API (R18) — agent-facing status/trigger/output channel ---
 window.__scripts = window.__scripts || {};
 window.__scripts['PSA'] = {
   name: 'RxFlow Sale Automator',
-  version: '2.16',
+  version: '2.19',
   state: 'idle',
   message: '',
   progress: null,
@@ -342,6 +342,10 @@ window.__scripts['PSA'] = {
     // canonical field it feeds (columns not listed are ignored by the automator).
     // v1.27: order refreshed to match the live sheet (Intake Link after Phone,
     // Confirmed Shipping / Medical Action added; Patient State column is gone).
+    // v2.18: added "Current Healing/GH peptides" (between Purchase and Existing
+    // RxFlow Patient). It is informational — not mapped to any canonical
+    // field — but it MUST hold its position here so headerless single-row
+    // pastes keep aligning every later column.
     // ── BUSINESS CONTEXT: the "Existing RxFlow Patient" column ──────────
     // (Jeyson, 2026-08-18 — do not "fix" this semantics back into a profile
     // check. A non-empty value, e.g. "YES - Do Not Resend Intake", means the
@@ -358,7 +362,8 @@ window.__scripts['PSA'] = {
     // auto-skip regression).
     const FIXED_HEADER_ORDER = [
         "Patient Name", "Patient Email", "Phone", "Intake Link",
-        "RxFlow Patient ID", "Purchase", "Existing RxFlow Patient",
+        "RxFlow Patient ID", "Purchase", "Current Healing/GH peptides",
+        "Existing RxFlow Patient",
         "Invite Sent", "FA Signed", "Confirmed Shipping",
         "RxFlow Intake Completed", "Desired Shipping Date", "Medical Action",
         "Order Date", "Order Date Timestamp", "Notes"
@@ -388,25 +393,6 @@ window.__scripts['PSA'] = {
         return best;
     }
 
-    function splitCsvLine(line, delim) {
-        const out = [];
-        let cur = "";
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') {
-                if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
-                else inQuotes = !inQuotes;
-            } else if (ch === delim && !inQuotes) {
-                out.push(cur); cur = "";
-            } else {
-                cur += ch;
-            }
-        }
-        out.push(cur);
-        return out.map((s) => s.trim());
-    }
-
     // Guesses whether a line is a real header row (like "Patient Name, Email...")
     // versus a raw data row (like "Patient Name, patient@example.com..."). This
     // matters because a single copied spreadsheet row — no header line at all —
@@ -423,32 +409,84 @@ window.__scripts['PSA'] = {
     }
 
     function parseCSV(text) {
-        const lines = text.split(/\r\n|\n|\r/).filter((l) => l.trim().length > 0);
-        if (lines.length === 0) return [];
-        const delim = detectDelimiter(lines[0]);
-        const splitLines = lines.map((l) => splitCsvLine(l, delim));
+        if (typeof text !== "string") return [];
+        const body = text.trim();
+        if (!body) return [];
 
-        const firstIsHeader = looksLikeHeaderRow(splitLines[0]);
+        // Delimiter detection reads the first PHYSICAL line (the header row) —
+        // embedded newlines only ever appear in data cells, never the header.
+        const delim = detectDelimiter(body.split(/\r\n|\n|\r/)[0] || "");
+
+        // Full-stream CSV tokenizer (hardened v2.18). The sheet gained a
+        // "Current Healing/GH peptides" column whose cells contain EMBEDDED
+        // NEWLINES (e.g. "8/7\n3 Tesa/Ipa"). Spreadsheet copies quote such
+        // cells, but the old parser split the whole text on newlines FIRST,
+        // so every embedded newline became a fake row break — one patient
+        // turned into several broken rows. This tokenizer walks the entire
+        // text in a single pass and only ends a field (delimiter) or a row
+        // (newline) when OUTSIDE quotes, so multi-line cells stay intact.
+        const rows = [];
+        let row = [];
+        let field = "";
+        let inQuotes = false;
+        let i = 0;
+        while (i < body.length) {
+            const ch = body[i];
+            const next = body[i + 1];
+            if (inQuotes) {
+                if (ch === '"') {
+                    if (next === '"') { field += '"'; i += 2; continue; } // "" escape
+                    inQuotes = false; i++; continue;
+                }
+                field += ch; i++; continue;
+            }
+            if (ch === '"') {
+                // A quote opens a quoted field only at the START of a field;
+                // mid-cell quotes (e.g. a height like 6'8") stay literal.
+                if (field === "") { inQuotes = true; i++; continue; }
+                field += ch; i++; continue;
+            }
+            if (ch === delim) { row.push(field); field = ""; i++; continue; }
+            if (ch === "\r" || ch === "\n") {
+                if (ch === "\r" && next === "\n") i++; // CRLF = one break
+                row.push(field); field = "";
+                if (row.some((c) => c.trim() !== "")) rows.push(row);
+                row = [];
+                i++; continue;
+            }
+            field += ch; i++;
+        }
+        row.push(field); // flush the final field
+        if (row.some((c) => c.trim() !== "")) rows.push(row);
+
+        if (rows.length === 0) return [];
+
+        // Collapse embedded whitespace inside each cell — multi-line cells
+        // become single lines ("8/7\n3 Tesa/Ipa" -> "8/7 3 Tesa/Ipa",
+        // "3 Epithalon &\n3 Thymosin Inj" -> "3 Epithalon & 3 Thymosin Inj").
+        const cells = rows.map((r) => r.map((c) => c.trim().replace(/\s+/g, " ")));
+
+        const firstIsHeader = looksLikeHeaderRow(cells[0]);
 
         if (firstIsHeader) {
-            const headers = splitLines[0];
-            const rows = [];
-            for (let i = 1; i < splitLines.length; i++) {
+            const headers = cells[0];
+            const out = [];
+            for (let i = 1; i < cells.length; i++) {
                 const obj = {};
-                headers.forEach((h, idx) => { obj[h] = splitLines[i][idx] !== undefined ? splitLines[i][idx] : ""; });
-                rows.push(obj);
+                headers.forEach((h, idx) => { obj[h] = cells[i][idx] !== undefined ? cells[i][idx] : ""; });
+                out.push(obj);
             }
-            return rows;
+            return out;
         }
 
-        // Headerless: every line (including the first) is data. Build
-        // synthetic column names sized to the widest row, and carry the
-        // actual cell values so the mapping stage can show samples.
-        const maxCols = Math.max(...splitLines.map((cells) => cells.length));
+        // Headerless: every line is data. Build synthetic column names sized
+        // to the widest row and carry the actual values so the mapping stage
+        // can show samples.
+        const maxCols = Math.max(...cells.map((line) => line.length));
         const headers = Array.from({ length: maxCols }, (_, i) => `Column ${i + 1}`);
-        return splitLines.map((cells) => {
+        return cells.map((line) => {
             const obj = {};
-            headers.forEach((h, idx) => { obj[h] = cells[idx] !== undefined ? cells[idx] : ""; });
+            headers.forEach((h, idx) => { obj[h] = line[idx] !== undefined ? line[idx] : ""; });
             return obj;
         });
     }
@@ -460,6 +498,13 @@ window.__scripts['PSA'] = {
     function sanitizeRawInput(text) {
         return String(text)
             .replace(/<!--[\s\S]*?-->/g, "")          // Mso / HTML comments
+            // <br> tags are how HTML-clipboard copies encode the line breaks
+            // INSIDE a cell (the Mso comment "br {mso-data-placement:same-cell}")
+            // — turn them into a space (v2.18) so a multi-line cell stays one
+            // field instead of words getting merged ("8/7<br>3 Tesa/Ipa" would
+            // otherwise strip to "8/73 Tesa/Ipa"). Real newlines in a TSV paste
+            // are handled by the quote-aware parseCSV below.
+            .replace(/<br\s*\/?>/gi, " ")
             .replace(/<[^>]*>/g, "")                  // any leftover tags
             .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // [text](url) -> text
             .trim();
@@ -693,10 +738,62 @@ window.__scripts['PSA'] = {
        "3 Tesa/IPA & 2 Klow" -> [{ qty: 3, alias: "Tesa/IPA" }, { qty: 2, alias: "Klow" }]
        ========================================================================= */
 
+    /* ---- Product-name resolver (v2.19) ------------------------------------
+       Second chance for purchase shorthands that have no PRODUCT_ALIASES
+       entry ("3 Epithalon Inj", "3 [GRE] KLOW", "3 BPC-157 Inj"). It resolves
+       ONLY when the match is grounded:
+         1. exact PRODUCT_ALIASES hit wins outright;
+         2. otherwise the alias must equal a catalog product name once the
+            "[GRE] "-style brand tag, case and whitespace are ignored —
+            optionally ignoring ONE trailing form word (injectable/inj/
+            capsules/solution);
+         3. when several same-core variants survive (BPC-157 injectable vs
+            capsules), an EXPLICIT form word in the sheet picks between them;
+         4. anything still ambiguous or unknown returns null and is handed to
+            the human. The script never guesses which medication was meant. */
+    const PRODUCT_FORM_RULES = [
+        [/(capsules|capsule|caps)$/i, "capsules"],
+        [/(injectable|injection|inj)$/i, "injectable"],
+        [/(solution)$/i, "solution"]
+    ];
+    function normProductName(n) {
+        return String(n).toLowerCase().replace(/^\[[a-z]+\]\s*/, "").replace(/\s+/g, " ").trim();
+    }
+    function productForm(n) {
+        const s = String(n).toLowerCase();
+        for (const [re, canon] of PRODUCT_FORM_RULES) if (re.test(s)) return canon;
+        return null;
+    }
+    function stripProductForm(n) {
+        return normProductName(n).replace(/\s+(capsules|capsule|caps|injectable|injection|inj|solution)$/, "").trim();
+    }
+    function resolveCatalogProduct(aliasText) {
+        const direct = PRODUCT_ALIASES[String(aliasText).toLowerCase()];
+        if (direct && PRODUCT_INDEX[direct]) return direct;
+        const target = normProductName(aliasText);
+        const core = stripProductForm(aliasText);
+        if (core.length < 3) return null;
+        const hits = Object.keys(PRODUCT_INDEX).filter((p) => normProductName(p) === target || stripProductForm(p) === core);
+        if (hits.length === 1) return hits[0];
+        if (hits.length > 1) {
+            const wantForm = productForm(aliasText);
+            if (wantForm) {
+                const formed = hits.filter((p) => productForm(p) === wantForm);
+                if (formed.length === 1) return formed[0];
+            }
+        }
+        return null;
+    }
+
     function parsePurchase(purchaseStr) {
-        const parts = purchaseStr.split("&").map((p) => p.trim()).filter(Boolean);
+        // Item separators are "&" AND a space-wrapped "+" — the live sheet uses
+        // both ("3 Tesa/Ipa + 3 Klow", "3 Klow & 3 Tesa/Ipa"). The "+" must be
+        // space-delimited (/\s+\+\s+/) so shorthands that CONTAIN a plus —
+        // "NAD+ Inj" — are never split in two.
+        const parts = String(purchaseStr).split(/&|\s\+\s/).map((p) => p.trim()).filter(Boolean);
         const items = [];
         const unmapped = [];
+        const autoMatched = [];
 
         for (const part of parts) {
             // "3 Tesa/IPA" -> qty 3, alias "Tesa/IPA". A part with NO leading
@@ -717,16 +814,18 @@ window.__scripts['PSA'] = {
             // v2.14: drop trailing sentence punctuation ("GHK-Cu Inj." -> "GHK-Cu Inj")
             // so shorthand ending in a period still resolves.
             rawAlias = rawAlias.replace(/[.,;:]+$/, "");
-            const key = rawAlias.toLowerCase();
-            const productName = PRODUCT_ALIASES[key];
-            if (!productName || !PRODUCT_INDEX[productName]) {
+            const productName = resolveCatalogProduct(rawAlias);
+            if (!productName) {
                 unmapped.push(part);
                 continue;
             }
+            // Distinguish a safety-net match from a real alias hit so the panel
+            // and console can report what was auto-resolved by name (v2.19).
+            if (PRODUCT_ALIASES[rawAlias.toLowerCase()] !== productName) autoMatched.push({ alias: rawAlias, product: productName });
             const effectiveQty = Math.min(qty, MAX_PEPTIDE_QTY);
             items.push({ qty: effectiveQty, requestedQty: qty, capped: qty > effectiveQty, alias: rawAlias, ...PRODUCT_INDEX[productName] });
         }
-        return { items, unmapped };
+        return { items, unmapped, autoMatched };
     }
 
     /* =========================================================================
@@ -998,7 +1097,7 @@ window.__scripts['PSA'] = {
     //                                       doesn't look like the patient)
     //   { status: "no-identifier" }        (row has no email/phone/name)
     //   { status: "error", message }       (search infrastructure missing)
-    async function checkPatientExists(row, onProgress) {
+    async function checkPatientExists(row, onPharmacyB) {
         const candidates = [
             { label: "email", value: row.patientEmail },
             { label: "phone", value: row.phone },
@@ -1008,7 +1107,7 @@ window.__scripts['PSA'] = {
         if (candidates.length === 0) return { status: "no-identifier" };
 
         for (const c of candidates) {
-            if (onProgress) onProgress(`searching by ${c.label}...`);
+            if (onPharmacyB) onPharmacyB(`searching by ${c.label}...`);
             trace("candidate", c.label, c.value);
             // Re-locate the search box fresh on every candidate — the app can
             // re-render/replace the input (R3), and a cached reference goes
@@ -2022,18 +2121,47 @@ window.__scripts['PSA'] = {
     }
 
     async function stepSelectModules(job, panel) {
-        const { items, unmapped } = parsePurchase(job.row.purchase);
+        const { items, unmapped, autoMatched } = parsePurchase(job.row.purchase);
+
+        // v2.19 (Jeyson rule): a purchase item with no matching alias must NOT
+        // abort the row. Add everything that DID resolve, then hand the
+        // leftovers to the human and resume the questionnaire / ship date /
+        // Continue automation once they've added them by hand. Before this,
+        // one unknown shorthand meant the whole rest of the sale was manual.
+        if (autoMatched.length > 0) {
+            const report = autoMatched.map((m) => `${m.alias} -> ${m.product}`).join("; ");
+            console.log(`[PSA] auto-matched by product name (no alias entry): ${report}`);
+            trace("selectModules autoMatched", report);
+        }
+
+        // A reload while the manual hand-off is open must not re-add the
+        // products that are already in the cart — the flag persists with the job.
+        if (!job.productsAdded) {
+            try {
+                for (const item of items) {
+                    await goToProduct(item.medType, item.category, item.product, item.qty, item.requestedQty, item.capped, panel);
+                }
+            } catch (err) {
+                setStatus(panel.status, `Failed: ${err.message}`, false, true);
+                return;
+            }
+            job.productsAdded = true;
+            saveJob(job);
+        }
 
         if (unmapped.length > 0) {
-            setStatus(panel.status, `Unmapped purchase item(s): ${unmapped.join(", ")}. Add them to PRODUCT_ALIASES and resume manually.`, false, true);
+            renderUnmappedHandoff(job, panel, unmapped, items.length, autoMatched);
             return;
         }
 
-        try {
-            for (const item of items) {
-                await goToProduct(item.medType, item.category, item.product, item.qty, item.requestedQty, item.capped, panel);
-            }
+        await continueAfterProducts(job, panel);
+    }
 
+    // The questionnaire + ship-date half of the modules step. Split out in
+    // v2.19 so the manual-product hand-off can resume straight into it without
+    // re-adding the products that are already in the cart.
+    async function continueAfterProducts(job, panel) {
+        try {
             // v2.12 (Jeyson rule): the sheet column is the SOLE source of
             // truth — blank -> auto-skip; non-empty -> prefill + human
             // review/submit. The profile-check pass no longer overwrites it.
@@ -2058,6 +2186,36 @@ window.__scripts['PSA'] = {
         } catch (err) {
             setStatus(panel.status, `Failed: ${err.message}`, false, true);
         }
+    }
+
+    // v2.19: the manual hand-off for purchase items with no alias/name match.
+    // The matched items are ALREADY in the cart; the human adds the leftovers
+    // with the app's own product list (the script cannot know which catalog
+    // entry they mean), then this resumes the automation — never auto-guessed.
+    function renderUnmappedHandoff(job, panel, unmapped, addedCount, autoMatched) {
+        panel.body.innerHTML = "";
+        const resumeBtn = document.createElement("button");
+        resumeBtn.className = "psa-btn psa-btn-primary";
+        resumeBtn.textContent = "Added them manually — continue";
+        resumeBtn.addEventListener("click", () => {
+            apiSet('running', "Manual products added — continuing with questionnaire / ship date");
+            continueAfterProducts(job, panel);
+        });
+        panel.body.appendChild(resumeBtn);
+
+        const status = document.createElement("div");
+        status.id = "psa-status";
+        panel.body.appendChild(status);
+        panel.status = status;
+
+        let msg = `No catalog match for: ${unmapped.join(", ")}. `;
+        if (addedCount > 0) msg += `${addedCount} matched item(s) are already in the cart. `;
+        if (autoMatched && autoMatched.length > 0) msg += `Auto-matched by name: ${autoMatched.map((m) => `${m.alias} -> ${m.product}`).join("; ")}. `;
+        msg += "Add the item(s) above with the app's product list, then press the button — the questionnaire, ship date and Continue stay automated.";
+        setStatus(status, msg, false);
+        status.style.color = "var(--ds-warn, #a16207)"; // amber = needs human review
+        apiSet('waiting_human', `Unmatched purchase item(s): ${unmapped.join(", ")} — add them manually, then continue`);
+        trace("selectModules blocked on unmapped", unmapped.join(", "));
     }
 
     async function finishModulesStep(job, panel) {
@@ -2663,6 +2821,52 @@ window.__scripts['PSA'] = {
       if (action === 'reset') {
         const btn = document.getElementById('psa-reset');
         if (btn) btn.click();
+        return { ok: true };
+      }
+      // R19: load-rows — populate the queue by API (no parse/map UI, no manual
+      // localStorage). Accepts an array of objects keyed by CANONICAL fields
+      // (patientName, patientEmail, phone, patientId, purchase, existingPatient,
+      // shipDate, patientState, notes) OR an array of raw CSV strings. Each row
+      // is normalized to canonical fields, _id'd, saved, and the panel re-renders
+      // — byte-identical to what the UI's "build row queue" produces.
+      if (action === 'load-rows') {
+        const src = params && params.rows ? params.rows : null;
+        if (!Array.isArray(src) || src.length === 0) return { ok: false, error: 'params.rows must be a non-empty array' };
+        const isCsv = typeof src[0] === 'string';
+        let rawRows;
+        if (isCsv) {
+          // each element is a line; join and run the same parser the UI uses.
+          // parseCSV returns header-keyed row objects (or synthetic Column-N
+          // keys for headerless), auto-detecting the header row + delimiter.
+          rawRows = parseCSV(src.join('\n'));
+        } else {
+          rawRows = src;
+        }
+        // normalize: if a row already carries canonical keys (patientName, ...),
+        // keep them; else auto-map by header name (fall back to fixed schema).
+        const rows = rawRows.map((o) => {
+          const hasCanonical = CANONICAL_FIELDS.some((f) => f in o && o[f] !== "" && o[f] !== undefined);
+          if (hasCanonical) { const out = {}; for (const f of CANONICAL_FIELDS) out[f] = String(o[f] || "").trim(); return out; }
+          const mapping = autoMapColumns(o);
+          const anyMapped = Object.values(mapping).some(Boolean);
+          const mapped = (anyMapped ? mapping : autoMapByFixedSchema(o));
+          const out = {}; for (const f of CANONICAL_FIELDS) out[f] = (mapped[f] && o[mapped[f]] !== undefined) ? String(o[mapped[f]]).trim() : "";
+          return out;
+        });
+        rows.forEach((r, i) => { r._id = i; });
+        saveQueue(rows);
+        renderInputStage(panel);   // refresh panel to the input stage (strip updates)
+        renderQueueStrip(panel);
+        return { ok: true, count: rows.length, rows: rows.map((r) => ({ id: r._id, name: r.patientName, patientId: r.patientId, purchase: r.purchase })) };
+      }
+      if (action === 'get-queue') {
+        const q = loadQueue() || [];
+        return { ok: true, count: q.length, rows: q };
+      }
+      if (action === 'clear-queue') {
+        clearQueue();
+        renderInputStage(panel);
+        renderQueueStrip(panel);
         return { ok: true };
       }
       return { ok: false, error: `unknown action: ${action}` };

@@ -239,14 +239,28 @@ for (const file of files) {
 // found by pattern, never by a hardcoded id or timestamp.
 // ---------------------------------------------------------------------------
 (function gateExtension() {
-  const base = path.resolve(ROOT, '..');
-  const mirror = fs.existsSync(base)
-    ? fs.readdirSync(base).find(d => d.startsWith('ghl-current-orders-delivery-review-v11-'))
-    : null;
-  const extDir = mirror && path.join(base, mirror, 'ghl-current-orders-delivery-review-v11');
+  // The mirror used to be found by looking beside the repo, which only worked
+  // while the repo lived in Dropbox/Source Folder. It does not any more, so try
+  // every place it can plausibly be — env override first, then beside the repo,
+  // then the Dropbox folder it actually sits in — and take the first real hit.
+  const bases = [
+    process.env.GHL_EXT_ROOT,
+    path.resolve(ROOT, '..'),
+    'C:/Users/PC/Dropbox/Source Folder',
+  ].filter(Boolean);
+  let extDir = null;
+  for (const base of bases) {
+    if (!fs.existsSync(base)) continue;
+    const mirror = fs.readdirSync(base).find(d =>
+      d.startsWith('ghl-current-orders-delivery-review-v11-') &&
+      fs.statSync(path.join(base, d), { throwIfNoEntry: false })?.isDirectory());
+    if (!mirror) continue;
+    const cand = path.join(base, mirror, 'ghl-current-orders-delivery-review-v11');
+    if (fs.statSync(cand, { throwIfNoEntry: false })?.isDirectory()) { extDir = cand; break; }
+  }
   const gate = extDir && path.join(extDir, 'verify-port.js');
   if (!gate || !fs.existsSync(gate)) {
-    WARN('GHL extension not found beside this repo — verify-port.js drift gate skipped');
+    WARN(`GHL extension not found (looked in: ${bases.join(', ')}) — verify-port.js drift gate skipped`);
     return;
   }
   const r = spawnSync(process.execPath, ['verify-port.js'], { cwd: extDir, encoding: 'utf8' });

@@ -852,23 +852,6 @@ GM_addStyle(`
       });
       item.appendChild(btn2);
     }
-    if (path && path.length === 3 && path[0] === 'Pharmacy J') {
-      const btn3 = document.createElement('span');
-      btn3.className = 'zuni-sms';
-      btn3.textContent = 'CART';
-      btn3.title = 'Add to the Pharmacy J order cart (the form has 4 rows)';
-      btn3.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        hidePreview();
-        const c = __api.__pharmacyjCart = __api.__pharmacyjCart || [];
-        const key = path[1] + '\u0000' + path[2];
-        if (c.some(x => x.group + '\u0000' + x.optionLabel === key)) { showToast('already in the Pharmacy J cart'); return; }
-        if (c.length >= 4) { showToast('⚠️ the Pharmacy J form has 4 rows — fill or remove one'); return; }
-        c.push({ group: path[1], optionLabel: path[2] });
-        showToast('🧾 ' + c.length + '/4 in the Pharmacy J cart');
-      });
-      item.appendChild(btn3);
-    }
     item.addEventListener('mouseenter', (e) => showPreview(e, text));
     item.addEventListener('mouseleave', hidePreview);
     item.addEventListener('click', (e) => {

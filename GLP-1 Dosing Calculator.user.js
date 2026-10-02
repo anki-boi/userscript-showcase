@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GLP-1 Dosing Calculator
 // @namespace    http://tampermonkey.net/
-// @version      1.14
+// @version      1.15
 // @description  Auto-calculates GLP-1 order block dosing (total-dose and duration modes)
 // @author       Jeyson Dagondon
 // @grant        none
@@ -11,11 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[GLP1 v1.14] boot');
+console.info('[GLP1 v1.15] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['GLP1'] = { name: 'GLP-1 Dosing Calculator', version: '1.14', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['GLP1'] = { name: 'GLP-1 Dosing Calculator', version: '1.15', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -789,6 +789,20 @@ window.__scripts['GLP1'] = { name: 'GLP-1 Dosing Calculator', version: '1.14', s
         p.style.display = p.style.display === 'none' ? 'block' : 'none';
     }
 
+    // Trigger contract rule 2 — the two exits the × alone does not cover: Escape, and a
+    // click anywhere outside. Same 12 lines as the Patient Toolkit's copy (SPEC bundling
+    // rule: no @require, every script carries its own copy).
+    function wirePanelDismiss(getPanel, getTrigger, close) {
+        const inside = (el, node) => !!(el && node && (el === node || el.contains(node)));
+        const isOpen = () => { const p = getPanel(); return !!p && p.style.display !== 'none'; };
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) close(); });
+        document.addEventListener('click', (e) => {
+            if (!e.isTrusted || !isOpen()) return;
+            if (inside(getPanel(), e.target) || inside(getTrigger(), e.target)) return;
+            close();
+        }, true);
+    }
+
     let injectTries = 0;
     function injectToolbarButton() {
         if (document.getElementById(BTN_ID)) return; // already injected
@@ -816,6 +830,12 @@ window.__scripts['GLP1'] = { name: 'GLP-1 Dosing Calculator', version: '1.14', s
         const panel = buildPanel(); panel.style.display = 'none'; document.body.appendChild(panel);
         renderMeds(); renderVials(); renderSteps(); recalc();
         injectToolbarButton();
+        // Rule 2: ✕ (in buildPanel) + Escape + click-outside. Wired once.
+        wirePanelDismiss(
+            () => document.getElementById(PANEL_ID),
+            () => document.getElementById(BTN_ID),
+            () => { const p = document.getElementById(PANEL_ID); if (p) p.style.display = 'none'; }
+        );
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

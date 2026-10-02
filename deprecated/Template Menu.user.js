@@ -3828,13 +3828,11 @@ GM_addStyle(`
       user-select: none !important; -webkit-user-select: none !important;
     }
     #tmenu-fab:hover { filter: brightness(0.95); }
-    /* Fallback if the Zoho top panel isn't found: keep the old floating pill so
-       the button is still reachable instead of vanishing into the page flow. */
-    #tmenu-fab.tmenu-fab-fallback {
-      position: fixed !important; top: 10px !important; left: 10px !important;
-      width: 48px !important; height: 48px !important; border-radius: 100% !important;
-      font-size: 20px !important; margin-left: 0 !important;
-    }
+    /* Fallback while the Zoho top panel has not rendered yet: the button stays HIDDEN
+       rather than floating over the page (DESIGN.md § Trigger contract rule 3 — hidden
+       beats floating, Jeyson 2026-10-02). The dock watcher below keeps looking, and
+       Alt+T still opens the menu centre-screen when there is no dock to click. */
+    #tmenu-fab.tmenu-fab-fallback { display: none !important; }
     #tmenu-root { position: fixed !important; z-index: 2147483647 !important; }
     .tmenu-ul {
       display: block !important; list-style: none !important; margin: 0 !important; padding: 4px 0 !important;

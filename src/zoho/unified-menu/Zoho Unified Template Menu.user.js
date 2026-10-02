@@ -8,7 +8,7 @@
 // ==UserScript==
 // @name         Zoho Unified Template Menu
 // @namespace    http://tampermonkey.net/
-// @version      1.5.1
+// @version      1.5.2
 // @description  Unified template menu: order blocks + patient SMS from one bank (chrome from Template Menu 6.33 + Peptide SMS 5.28.1)
 // @author       Jeyson Dagondon
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
@@ -32,7 +32,7 @@
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
 
-console.info('[ZUnified v1.5.1] boot');
+console.info('[ZUnified v1.5.2] boot');
 
 // --- Script API (R18) ---
 // KNOWN LIMITATION (verified 2026-09-27 on TM/Edge 154): a script with GM grants
@@ -46,7 +46,7 @@ console.info('[ZUnified v1.5.1] boot');
 // the registry. Do not add a gate that reads `window.__scripts.ZUnified`.
 const __api = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
 __api.__scripts = __api.__scripts || {};
-__api.__scripts['ZUnified'] = { name: 'Zoho Unified Template Menu', version: '1.5.1', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+__api.__scripts['ZUnified'] = { name: 'Zoho Unified Template Menu', version: '1.5.2', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 // v6.33 (2026-09-27) — IDLE COST, not behavior. Zoho detail pages emit mutation
 //   batches constantly and the tab count is high, so the tax was:
 //   - top-frame gate + @all_frames removed (iframes built the whole tree for nothing)
@@ -457,13 +457,11 @@ GM_addStyle(`
       user-select: none !important; -webkit-user-select: none !important;
     }
     #zuni-fab:hover { filter: brightness(0.95); }
-    /* Fallback if the Zoho top panel isn't found: keep the old floating pill so
-       the button is still reachable instead of vanishing into the page flow. */
-    #zuni-fab.zuni-fab-fallback {
-      position: fixed !important; top: 10px !important; left: 10px !important;
-      width: 48px !important; height: 48px !important; border-radius: 100% !important;
-      font-size: 20px !important; margin-left: 0 !important;
-    }
+    /* Fallback while the Zoho top panel has not rendered yet: the button stays HIDDEN
+       rather than floating over the page (DESIGN.md § Trigger contract rule 3 — hidden
+       beats floating, Jeyson 2026-10-02). The dock watcher below keeps looking, and Alt+T
+       still opens the menu centre-screen while the FAB is hidden. */
+    #zuni-fab.zuni-fab-fallback { display: none !important; }
     #zuni-root { position: fixed !important; z-index: 2147483647 !important; }
     .zuni-ul {
       display: block !important; list-style: none !important; margin: 0 !important; padding: 4px 0 !important;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM — Peptide SMS Templates
 // @namespace    userscript-showcase
-// @version      5.29.0
+// @version      5.29.1
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @match        https://crm.zoho.com/*
@@ -10,11 +10,17 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[RxSMS v5.29.0] boot');
+console.info('[RxSMS v5.29.1] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', version: '5.28.1', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', version: '5.29.1', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+
+// v5.29.1 CHANGES (2026-10-02):
+//  - Trigger contract rule 2: the panel had ✕ + overlay click but NO Escape. openPanel
+//    now registers a self-removing keydown listener (same pattern as the create-chooser).
+//  - The Script API `version:` field was stale at 5.28.1 while @version was 5.29.0 — it
+//    now tracks @version (the R18 field lies to every live harness when it drifts).
 
 // v5.28.0 CHANGES (2026-09-25):
 //  - Order Placed 2.0: Pharmacy K's lyophilized Tesamorelin / Ipamorelin moved
@@ -483,7 +489,7 @@ window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', versio
 (function () {
   'use strict';
 
-  const __VER__ = '5.29.0'; // keep in sync with @version (gate FAILs on drift)
+  const __VER__ = '5.29.1'; // keep in sync with @version (gate FAILs on drift)
 
   const RL_ID = '4159382000379742568'; // ABR RingCentral SMS related list
 
@@ -3768,6 +3774,14 @@ Thank you!`;
 
     panel.querySelector('.pt-close').addEventListener('click', function () { overlay.remove(); });
     overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.remove(); });
+
+    // Trigger contract rule 2 — the third exit was missing (✕ + overlay click only).
+    // Self-removes once the overlay is gone so repeated opens cannot stack document
+    // listeners (same pattern as the create-chooser's esc handler).
+    document.addEventListener('keydown', function esc(e) {
+      if (!document.body.contains(overlay)) { document.removeEventListener('keydown', esc); return; }
+      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); }
+    });
 
     overlay.appendChild(panel);
     document.body.appendChild(overlay);

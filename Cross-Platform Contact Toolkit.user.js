@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cross-Platform Contact Toolkit
 // @namespace    http://tampermonkey.net/
-// @version      7.31
+// @version      7.34
 // @author       Jeyson Dagondon
 // @description  Unified toolbar: copy name+link, cross-platform search, LifeFile order check
 // @match        https://app.gohighlevel.com/*
@@ -23,11 +23,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[Toolkit v7.31] boot');
+console.info('[Toolkit v7.34] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', version: '7.31', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', version: '7.34', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -700,30 +700,83 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
      ============================================================ */
   let ghlAutoPasteBound = false;
 
-  function ghlSnapshotResults() {
-    const list = document.getElementById('global-search-list');
-    if (!list) return new Set();
-    return new Set(
-      [...list.querySelectorAll('.search-item.cursor-pointer')].map((el) => el.outerHTML)
-    );
+  /* GHL rebuilt its global search (live probe 2026-10-02). The panel is now:
+       #gs2-input            -> the search box (the <input> is inside it)
+       #gs2-panel-all-listbox -> a FLAT list of groups: .gs2-section-header
+                                 (.gs2-section-label + .gs2-section-count) followed by
+                                 [id^="gs2-option-N"] result rows, one group per category
+                                 (Pages / Contacts / Opportunities / Products / Calendars)
+     #global-search-input, #global-search-list, .search-item.cursor-pointer and the
+     "TOTAL: n" span are GONE. The old code waited for #global-search-input, timed out,
+     and returned — a silent no-op, which is why the GHL button looked dead. The dead
+     selectors stay as fallbacks in case GHL rolls the old panel back. */
+  function ghlSearchInput() {
+    return document.querySelector('#gs2-input input') || document.getElementById('global-search-input');
   }
 
-  function ghlFreshResults(oldResults) {
-    const list = document.getElementById('global-search-list');
-    if (!list) return null;
-    const candidates = [...list.querySelectorAll('.search-item.cursor-pointer')].filter(
-      (el) => !oldResults.has(el.outerHTML)
-    );
-    return candidates.length ? candidates : null;
+  function ghlResultsList() {
+    return document.getElementById('gs2-panel-all-listbox') || document.getElementById('global-search-list');
   }
 
-  function ghlReadTotal() {
-    const el = Array.from(document.querySelectorAll('span')).find((s) =>
-      /^TOTAL:\s*\d+/i.test((s.textContent || '').trim())
-    );
-    if (!el) return null;
-    const m = (el.textContent || '').match(/TOTAL:\s*(\d+)/i);
-    return m ? parseInt(m[1], 10) : null;
+  // Pure (takes the list container) so it is testable without a browser. Returns the
+  // CONTACTS group only: GHL's panel mixes categories (Pages / Contacts / Opportunities /
+  // Calendars / Conversations…), and auto-opening one of those instead of a contact is a
+  // wrong-target handoff. Two live shapes are handled: each category wrapped in its own div
+  // (measured 2026-10-02), and headers + options as flat siblings (measured the same day).
+  function ghlContactSection(list) {
+    if (!list || !list.querySelectorAll) return null;
+    const headers = [...list.querySelectorAll('.gs2-section-header')];
+    const h = headers.find((x) => {
+      const l = x.querySelector('.gs2-section-label');
+      return l && /^\s*contacts?\s*$/i.test((l.textContent || '').trim());
+    });
+    if (h) {
+      const scope = h.parentElement || list;
+      const scopeHeaders = scope.querySelectorAll ? [...scope.querySelectorAll('.gs2-section-header')] : [];
+      let options;
+      if (scopeHeaders.length > 1 && scope.children) {
+        // Flat list: the options are the siblings between this header and the next one.
+        const kids = [...scope.children];
+        const i = kids.indexOf(h);
+        options = [];
+        for (let j = i + 1; j < kids.length; j++) {
+          if (kids[j].classList && kids[j].classList.contains('gs2-section-header')) break;
+          if (/^gs2-option-/.test(kids[j].id || '')) options.push(kids[j]);
+        }
+      } else {
+        options = [...scope.querySelectorAll('[id^="gs2-option-"]')];
+      }
+      const countEl = h.querySelector('.gs2-section-count');
+      const digits = ((countEl && countEl.textContent) || '').replace(/\D/g, '');
+      return { count: digits ? parseInt(digits, 10) : null, options };
+    }
+    // Headers exist but none is Contacts -> this panel has no contact for us. Never
+    // treat another category's rows as a contact.
+    if (headers.length) return null;
+    // No headers at all: the Contacts filter is active, so everything here is a contact.
+    const options = [...list.querySelectorAll('[id^="gs2-option-"]')];
+    return options.length ? { count: null, options } : null;
+  }
+
+  // The category filter row (role=tab pills: All / Contacts / Opportunities / …). Filtering
+  // to Contacts is what removes the noise (Jeyson, 2026-10-02). Labels are visually
+  // truncated by GHL's own CSS ("Opportunitie"), so match the prefix only.
+  function ghlContactPill() {
+    return [...document.querySelectorAll('.gs2-apps-pill')].find((b) => /^\s*contact/i.test((b.innerText || '').trim())) || null;
+  }
+
+  // A count is not identity (DESIGN.md § Data lookup). Before auto-clicking, the row's NAME
+  // field must actually carry the name we searched for, whole token for whole token.
+  // The row's own textContent is useless for this: GHL glues the title and the subtitle
+  // together with no whitespace ("…Armijo" + "residual@email…"), so a token search on the
+  // whole row misses the surname. Read .v2-result-row__title-text (the highlight spans that
+  // mark the matched letters sit inside it and still concatenate cleanly).
+  function ghlRowMatchesName(name, row) {
+    const want = String(name || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).filter(Boolean);
+    if (!want.length || !row) return false;
+    const title = (row.querySelector && row.querySelector('.v2-result-row__title-text')) || row;
+    const have = ' ' + String(title.textContent || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ') + ' ';
+    return want.every((t) => have.includes(' ' + t + ' '));
   }
 
   async function ghlOpenPanel() {
@@ -736,7 +789,7 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
           )
         );
       }
-      const input = await waitFor(() => document.getElementById('global-search-input'), 600, 100);
+      const input = await waitFor(() => ghlSearchInput(), 600, 100);
       if (input) return input;
       await sleep(300);
     }
@@ -746,26 +799,44 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
   async function ghlRunSearch(name) {
     // Wait for the opener to appear — GHL's SPA can take many seconds after DOMContentLoaded
     const opener = await waitFor(() => document.getElementById('globalSearchOpener'), 60000, 200);
-    if (!opener) return;
+    // Every failure here used to be a silent `return`, which is why a dead handoff looked
+    // like "the button does nothing". Each one now says so on screen.
+    if (!opener) { showOrderToast('GHL search button not found — GHL changed its page. Search manually.'); return; }
 
     const input = await ghlOpenPanel();
-    if (!input) return;
-
-    const oldResults = ghlSnapshotResults();
+    if (!input) { showOrderToast('GHL search panel did not open — search manually.'); return; }
 
     input.click();
     input.focus();
     setNativeValue(input, name);
     input.focus();
 
-    const fresh = await waitFor(() => ghlFreshResults(oldResults), 8000);
-    await sleep(1000);
-    if (!fresh) return;
+    const got = await waitFor(() => { const s = ghlContactSection(ghlResultsList()); return s && s.options.length ? s : null; }, 8000);
+    if (!got) { showOrderToast(`GHL found no contact for “${name}” — check the name.`); return; }
 
-    if (ghlReadTotal() !== 1) return;
+    // Filter the panel to Contacts. In the All view GHL also returns Pages, Opportunities,
+    // Calendars and Conversations, and their rows are what the old code used to count.
+    const pill = await waitFor(() => ghlContactPill(), 3000, 150);
+    if (pill && !/\bgs2-apps-pill--active\b/.test(pill.className || '')) { pill.click(); await sleep(900); }
 
-    const latest = ghlFreshResults(oldResults);
-    if (latest && latest.length) latest[0].click();
+    const sec = ghlContactSection(ghlResultsList());
+    if (!sec || !sec.options.length) { showOrderToast(`GHL has no CONTACT for “${name}” — the hits were in other sections.`); return; }
+
+    // The section count is GHL's own total for that category; the option list is what is
+    // actually on screen (the All view previews up to 3). Either one saying "more than one"
+    // means a human has to pick.
+    const total = sec.count !== null ? sec.count : sec.options.length;
+    if (total !== 1) {
+      showOrderToast(`GHL found ${total} contacts for “${name}” — pick the right one.`);
+      return;
+    }
+
+    const row = sec.options[0];
+    if (!ghlRowMatchesName(name, row)) {
+      showOrderToast(`GHL's single contact result is not “${name}” — confirm before opening.`);
+      return;
+    }
+    row.click();
   }
 
   // Manual auto-paste: when the user clicks GHL's search icon,

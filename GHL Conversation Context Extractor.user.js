@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GHL Conversation Context Extractor
 // @namespace    https://github.com/anki-boi/userscript-showcase
-// @version      1.9.6
+// @version      1.9.8
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  One-click GHL conversation extractor (SMS/calls/transcripts/emails) to XML/JSON
@@ -17,13 +17,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[GHL-Ctx v1.9.6] boot');
+console.info('[GHL-Ctx v1.9.8] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['GHL'] = {
   name: 'GHL Conversation Context Extractor',
-  version: '1.9.6',
+  version: '1.9.8',
   state: 'idle',
   message: '',
   progress: null,
@@ -539,6 +539,13 @@ window.__scripts['GHL'] = {
             container.classList.remove('gx-docked');
             if (!container.isConnected) mountFloating();
         }
+        // Jeyson 2026-10-02: "I would prefer the thing to only show when it's docked."
+        // While GHL is still building the detail panel there is no row to dock into, and a
+        // floating pill in that gap is just a button that appears then jumps. It stays hidden
+        // until it is actually docked. Exception: a run in progress stays visible even if the
+        // row momentarily disappears, because its toast is the progress readout.
+        container.style.display =
+            (docked || toggle.classList.contains('gx-working')) ? '' : 'none';
     }
     keepDocked();
     // ponytail: 1.2 s poll. Upgrade path is a MutationObserver on the detail panel if a
@@ -1098,6 +1105,19 @@ window.__scripts['GHL'] = {
         const messageCount = () =>
             document.querySelectorAll('.message-item[data-message-id]').length;
 
+        // The virtualizer keeps ~10 items mounted no matter how much history has
+        // materialized, so the MOUNTED count is not progress: a 379-item thread sat on
+        // "11 messages so far" for 210s and looked hung. Pharmacy B here is the number of
+        // DISTINCT message ids this run has ever seen.
+        const seenIds = new Set();
+        const seenCount = () => {
+            document.querySelectorAll('.message-item[data-message-id]').forEach(n => {
+                const id = n.getAttribute('data-message-id');
+                if (id) seenIds.add(id);
+            });
+            return seenIds.size;
+        };
+
         // Depth bound. minRounds stops a thread whose FIRST mounted window is
         // already older than the bound from leaving before a single batch fetch has
         // been triggered; graceRounds absorbs an undated entry sitting between two
@@ -1147,7 +1167,7 @@ window.__scripts['GHL'] = {
             if (grew) lastGrowthAt = Date.now();
 
             rounds++;
-            if (onPharmacyB) onPharmacyB(messageCount(), rounds);
+            if (onPharmacyB) onPharmacyB(seenCount(), rounds, messageCount());
 
             // Time-based idle break: only stop after LOAD_IDLE_BREAK_MS of
             // continuous no-growth. Round-count budgets race with batch gaps
@@ -1175,6 +1195,7 @@ window.__scripts['GHL'] = {
 
         return {
             rounds,
+            seen: seenIds.size,
             finalCount: messageCount(),
             stopped: shouldStop,
             depthRequestedMs: boundMs,
@@ -1277,6 +1298,11 @@ window.__scripts['GHL'] = {
             // harvest (v1.8.8 flake).
             await sleep(800);
             await settleAndHarvest();
+            // The harvest walk is the long phase (~0.8s+ per step) and had no readout at
+            // all: "Building output..." sat there while hundreds of items were walked.
+            if (harvestWholeThread._onHarvestPharmacyB) {
+                harvestWholeThread._onHarvestPharmacyB(messages.size, steps, transcriptsOpened);
+            }
 
             const atBottom = (sc.scrollTop + sc.clientHeight) >= (sc.scrollHeight - 4);
             const h = sc.scrollHeight;
@@ -1342,6 +1368,7 @@ window.__scripts['GHL'] = {
             oldestReachedMs,
             load: {
                 rounds: loadStats.rounds,
+                seen: loadStats.seen,
                 messages: loadStats.finalCount,
                 ms: loadMs,
                 stopped: loadStats.stopped,
@@ -1818,9 +1845,15 @@ window.__scripts['GHL'] = {
             // announced is exactly the silent truncation this picker exists to stop.
             const windowText = depth ? `back to ${isoDay(depthBound)} (${runDepth.label})` : 'full history';
             showToast(`Loading ${windowText}…`, 'success', 60000);
-            harvestWholeThread._onLoadPharmacyB = (count, rounds) => {
-                api.progress = { phase: 'load', messages: count, rounds };
-                showToast(`Loading ${windowText}… ${count} messages so far`, 'success', 120000);
+            harvestWholeThread._onLoadPharmacyB = (seen, rounds, mounted) => {
+                api.progress = { phase: 'load', seen, mounted, rounds };
+                // "seen" = distinct ids ever mounted (the real progress). "on screen" is the
+                // virtualizer window, shown so a small number there is not read as a small thread.
+                showToast(`Loading ${windowText}… ${seen} seen · round ${rounds} (${mounted} on screen)`, 'success', 120000);
+            };
+            harvestWholeThread._onHarvestPharmacyB = (harvested, steps, transcripts) => {
+                api.progress = { phase: 'harvest', harvested, steps, transcripts };
+                showToast(`Harvesting… ${harvested} items · step ${steps} (${transcripts} transcripts)`, 'success', 120000);
             };
             const result = await harvestWholeThread({ depth });
 
@@ -1954,6 +1987,7 @@ window.__scripts['GHL'] = {
             const stats = {
                 load: {
                     rounds: result.load.rounds,
+                    seen: result.load.seen,
                     messages: result.load.finalCount,
                     ms: result.load.ms,
                     stopped: result.load.stopped,
@@ -1968,6 +2002,7 @@ window.__scripts['GHL'] = {
             diagMsg += `\n⏱ ${((result.load.ms + result.harvest.ms) / 1000).toFixed(1)}s — ` +
                 `load ${result.load.rounds}r/${(result.load.ms / 1000).toFixed(1)}s · ` +
                 `harvest ${result.harvest.steps} steps/${(result.harvest.ms / 1000).toFixed(1)}s · ` +
+                `${result.load.seen} seen · ` +
                 `${result.transcriptLines} transcript lines` +
                 `\n🗓 window: ${meta.depthRequested} → oldest chip seen ${meta.oldestReached || 'unknown'}`;
 

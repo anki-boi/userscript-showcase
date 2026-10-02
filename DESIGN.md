@@ -73,9 +73,24 @@ per-script anchors: `plans/2026-10-02_inline-panel-triggers.md`.
 2. **One summon control, three exits.** Every summoned panel closes on its own
    ✕/Exit, on **Escape**, and on a **click anywhere outside it** (capture phase,
    ignoring the trigger). A ✕ alone is not enough.
-3. **Floating fallback only when the host chrome is missing** — small,
-   edge-docked, and self-re-docking when the chrome appears
-   (`Template Menu`'s `#tmenu-fab` + `.tmenu-fab-fallback` + `watchFAB()`).
+   Reference implementation for a panel that is **not** an overlay: `wirePanelDismiss()`
+   — identical copies in `Zoho + RxFlow Patient Toolkit` (v1.1.7) and
+   `GLP-1 Dosing Calculator` (v1.15). It ignores **untrusted** clicks on purpose: these
+   scripts drive the host app by dispatching synthetic clicks, and a handler that answered
+   those would close the panel mid-run (the Patient Toolkit renders its per-field results
+   *inside* the panel). Proof + regression gate: `_smoketest/verify-panel-exits.js`.
+3. **Hidden beats floating.** If the host chrome the trigger docks into is not
+   there yet (SPA still building, a route that has no such row), the trigger stays
+   **mounted but hidden** — never a `position:fixed` pill that appears now and jumps
+   later. The re-dock watcher keeps looking, and the keyboard path (if the script has
+   one) still works while it is hidden. Jeyson, on `GHL Conversation Context Extractor`
+   (2026-10-02): "does the button have to float while the DOM is loading or something?
+   I would prefer the thing to only show when it's docked." Models: that script's
+   `keepDocked()` (drives `container.style.display`), `Template Menu`'s
+   `#tmenu-fab.tmenu-fab-fallback { display: none }` + its dock watcher, and
+   `RxFlow Sale Automator`'s `buildTrigger()`, which mounts nothing at all when
+   neither dock anchor exists and lets `watchTrigger()` retry.
+   Exception: rule 6 (a script with no host chrome at all).
 4. **Dragging is not closing.** A draggable always-present panel is still an
    always-present panel.
 5. **It must survive split screen.** Dock on the **fixed left edge** of the host's

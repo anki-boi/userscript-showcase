@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM Context Extractor
 // @namespace    https://github.com/anki-boi/userscript-showcase
-// @version      2.9.12
+// @version      2.9.13
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  One-click Zoho context extractor: Notes, Care Plans, Comm Logs, Attachments
@@ -15,13 +15,18 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[ZCtx v2.9.12] boot');
+console.info('[ZCtx v2.9.13] boot');
+
+// v2.9.13 CHANGES (2026-10-02):
+//  - Trigger contract rule 2: Escape now closes BOTH summoned surfaces (the right-click
+//    options menu and the section picker) via dismissSurfaces(). Click-outside already
+//    existed; the 4 s menu timeout stays.
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['ZCtx'] = {
   name: 'Zoho CRM Context Extractor',
-  version: '2.9.12',
+  version: '2.9.13',
   state: 'idle',
   message: '',
   output: null,
@@ -380,6 +385,17 @@ window.__scripts['ZCtx'] = {
     function closeMenu() {
         settingsMenu.classList.remove('visible');
     }
+
+    // Trigger contract rule 2 — Escape closes BOTH summoned surfaces (the right-click
+    // menu and the section picker). The ✕ equivalents are the menu's own items and the
+    // popup's Cancel button; the click-outside handler is just below. The 4 s menu
+    // timeout stays — a co-worker's hand can leave the menu open by accident.
+    function dismissSurfaces() {
+        closeMenu();
+        sectionPopup.style.display = 'none';
+    }
+
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') dismissSurfaces(); });
 
     // Close menu if clicking outside. NOTE: a real click on the toolbar button
     // lands on its inner <strong> (e.target has no id), so match the button by

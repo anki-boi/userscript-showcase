@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LifeFile Order Autofill
 // @namespace    http://tampermonkey.net/
-// @version      1.23
+// @version      1.24
 // @author       Jeyson Dagondon
 // @description  LifeFile order autofill: patient search-or-create + order-form fill (no auto-submit, no step-2)
 // @match        https://hostB.pharmalink.example/*
@@ -14,11 +14,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[LF-Autofill v1.23] boot');
+console.info('[LF-Autofill v1.24] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1.23', state: 'idle', message: 'Loaded', progress: null, output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1.24', state: 'idle', message: 'Loaded', progress: null, output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -156,7 +156,7 @@ window.__scripts['LF-Autofill'] = { name: 'LifeFile Order Autofill', version: '1
         NC: ['Pharmacy B'],
         ND: ['Pharmacy A'],
         NV: ['Pharmacy D'],
-        OH: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C'],
+        OH: ['Pharmacy D', 'Pharmacy B', 'Pharmacy C', 'Pharmacy A'],
         OR: ['Pharmacy B'],
         SC: ['Pharmacy D', 'Pharmacy B'],
         TX: ['Pharmacy D', 'Pharmacy C'],

@@ -58,7 +58,11 @@ function parseHeader(h) {
 // ---------------------------------------------------------------------------
 
 function git(args) {
-  const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  // -c core.quotePath=false: git C-escapes non-ASCII paths by default
+  // ("Zoho CRM \342\200\224 ..."), so the em-dash script's path never matched
+  // dirtyFiles and R10's version-bump discipline was silently unenforced for it
+  // (same blind-spot class as the quoting fix below).
+  const r = spawnSync('git', ['-c', 'core.quotePath=false'].concat(args), { cwd: ROOT, encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
@@ -123,7 +127,15 @@ for (const file of files) {
   } else {
     const ver = kv.version[0];
     const hVer = headVersion(file);
-    if (hVer !== null && hVer !== ver && dirtyFiles.includes(file)) {
+    // A file marked FROZEN GOLDEN REFERENCE is reference data, not a maintained
+    // script: Template Menu.user.js stays in the repo only so the golden gate can
+    // diff rendered text against the original literals (SPEC Wave 6). Version-bump
+    // discipline does not apply to it — but it says so out loud, so the exemption
+    // cannot be picked up by accident.
+    const frozen = /FROZEN GOLDEN REFERENCE/.test(src);
+    if (frozen) {
+      WARN(`${file}: FROZEN GOLDEN REFERENCE — not installed, not maintained; R10 bump discipline does not apply`);
+    } else if (hVer !== null && hVer !== ver && dirtyFiles.includes(file)) {
       WARN(`${file}: @version ${ver} vs HEAD ${hVer} — changed AND bumped (good); reinstall pending`);
     } else if (hVer !== null && hVer === ver && dirtyFiles.includes(file)) {
       WARN(`${file}: changed on disk but @version NOT bumped (R10) — ${hVer} == HEAD`);
@@ -243,20 +255,43 @@ for (const file of files) {
   // while the repo lived in Dropbox/Source Folder. It does not any more, so try
   // every place it can plausibly be — env override first, then beside the repo,
   // then the Dropbox folder it actually sits in — and take the first real hit.
+  // Each base is also searched ONE LEVEL DOWN: the mirror sits in a "Source Folder"
+  // inside repos and inside Dropbox, and a gate that silently skips while the
+  // master moves is the exact drift it exists to catch.
   const bases = [
     process.env.GHL_EXT_ROOT,
     path.resolve(ROOT, '..'),
+    path.resolve(ROOT, '..', 'Source Folder'),
     'C:/Users/PC/Dropbox/Source Folder',
   ].filter(Boolean);
+
+  const extIn = (dir) => {
+    if (!fs.existsSync(dir)) return null;
+    // Match the master folder by VERSION DIGIT, not a pinned `v11-` prefix. The
+    // folder is `ghl-current-orders-delivery-review-v11.5--JMD-update` — a DOT
+    // before the minor version — so the pinned prefix never matched and the drift
+    // gate has been skipping (WARN, but enforcing nothing) while the extension
+    // sits right there. A gate that cannot fail is not a gate.
+    const mirror = fs.readdirSync(dir).find(d =>
+      /^ghl-current-orders-delivery-review-v\d/i.test(d) &&
+      fs.statSync(path.join(dir, d), { throwIfNoEntry: false })?.isDirectory());
+    if (!mirror) return null;
+    const cand = path.join(dir, mirror, 'ghl-current-orders-delivery-review-v11');
+    return fs.statSync(cand, { throwIfNoEntry: false })?.isDirectory() ? cand : null;
+  };
+
   let extDir = null;
   for (const base of bases) {
-    if (!fs.existsSync(base)) continue;
-    const mirror = fs.readdirSync(base).find(d =>
-      d.startsWith('ghl-current-orders-delivery-review-v11-') &&
-      fs.statSync(path.join(base, d), { throwIfNoEntry: false })?.isDirectory());
-    if (!mirror) continue;
-    const cand = path.join(base, mirror, 'ghl-current-orders-delivery-review-v11');
-    if (fs.statSync(cand, { throwIfNoEntry: false })?.isDirectory()) { extDir = cand; break; }
+    extDir = extIn(base);
+    if (extDir) break;
+    const subs = fs.existsSync(base)
+      ? fs.readdirSync(base, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => path.join(base, e.name))
+      : [];
+    for (const sub of subs) {
+      extDir = extIn(sub);
+      if (extDir) break;
+    }
+    if (extDir) break;
   }
   const gate = extDir && path.join(extDir, 'verify-port.js');
   if (!gate || !fs.existsSync(gate)) {
@@ -271,6 +306,173 @@ for (const file of files) {
     FAIL(`GHL extension drift gate (verify-port.js): ${drift || (r.stderr || '').split('\n')[0]}`);
   }
 })();
+
+// ---------------------------------------------------------------------------
+// Unified-menu template bank gate (src/zoho/unified-menu/templates.json)
+// The bank is the source of truth for the unified Template Menu. It checks
+// parse + id/tuple integrity, the derived vial math (units, supply ±2wk, vial
+// identity), the override backlog, and staleness — then runs the golden gate.
+//
+// The math block used to read `actives`/`volume`/`units`/`tiers`, fields the
+// harvest never wrote, so its body never once executed for any of the 118
+// entries: a gate that cannot fail is not a gate. It now reads `entry.math`,
+// which harvest/derive-m.js derives from the harvested sentences and checks
+// arithmetically.
+// ---------------------------------------------------------------------------
+(function gateTemplateBank() {
+  const bankPath = path.join(ROOT, 'src', 'zoho', 'unified-menu', 'templates.json');
+  if (!fs.existsSync(bankPath)) { WARN('unified-menu bank missing — gate skipped'); return; }
+  let j;
+  try { j = JSON.parse(fs.readFileSync(bankPath, 'utf8')); }
+  catch (e) { FAIL(`unified-menu bank: JSON parse failed: ${e.message}`); return; }
+
+  // A `$schema` pointer to a file that does not exist is a lie, and this one
+  // pointed at nothing. The schema is now GENERATED from the bank
+  // (harvest/make-schema.js), so it can never drift; this checks the pointer
+  // still resolves.
+  if (j.$schema) {
+    const target = path.join(path.dirname(bankPath), String(j.$schema).replace(/^\.\//, ''));
+    if (!fs.existsSync(target)) FAIL(`unified-menu bank: $schema points at missing ${j.$schema}`);
+    else {
+      try {
+        const sch = JSON.parse(fs.readFileSync(target, 'utf8'));
+        const undocumented = Object.keys(j).filter((k) => !(sch.properties || {})[k]);
+        if (undocumented.length) FAIL(`unified-menu bank: schema does not document ${undocumented.join(', ')} — re-run harvest/make-schema.js`);
+      } catch (e) { FAIL(`unified-menu bank: schema JSON unreadable: ${e.message}`); }
+    }
+  }
+
+  const entries = [];
+  for (const [g, arr] of Object.entries(j.groups || {})) for (const e of arr) entries.push(e);
+  if (!entries.length) { WARN('unified-menu bank: no entries — gate skipped'); return; }
+
+  // --- integrity: class, unique ids, no active tuple collisions, supersedes ---
+  const ids = new Set();
+  const tuples = new Set();
+  let noClass = 0;
+  for (const e of entries) {
+    if (!e.id) { FAIL('unified-menu bank: entry with no id'); continue; }
+    if (ids.has(e.id)) FAIL(`unified-menu bank: duplicate id ${e.id}`);
+    ids.add(e.id);
+    if (e.supersedes && !ids.has(e.supersedes)) WARN(`unified-menu bank: ${e.id} supersedes missing ${e.supersedes}`);
+    if (!e.class) { noClass++; continue; }
+    if (e.retired) continue;
+    // GLP-1 stubs are per-patient calculator entries, not fixed pharmacy products.
+    if (e.class === 'glp1') continue;
+    const sms = e.sms || {};
+    const math = e.math || {};
+    for (const pk of e.pharmacies || []) {
+      if (j.pharmacies && !j.pharmacies[pk]) { WARN(`unified-menu bank: ${e.id} references unknown pharmacy ${pk}`); continue; }
+      // The SPEC's tuple is (drug set, pharmacy, concentration, volume, cadence).
+      // That is unsatisfiable as written: NAD+ Light/Medium/Strong and the
+      // Wolverine and Glow tiers share vial + cadence and differ ONLY by dose,
+      // so the rule flags legitimate products. The dose-bearing sentence is part
+      // of the identity, so it stays in the signature, and cadence is added on
+      // top (this is the KLOW guard the SPEC is actually about).
+      const vol = e.volume ?? (e.container && e.container.count) ?? math.volume ?? null;
+      const sig = [e.name ?? e.label, pk, JSON.stringify(sms.conc ?? null), vol, JSON.stringify(e.cadence ?? null), JSON.stringify(sms.rx ?? null)].join('|');
+      if (tuples.has(sig)) FAIL(`unified-menu bank: active tuple collision: ${sig}`);
+      tuples.add(sig);
+    }
+  }
+  if (noClass) FAIL(`unified-menu bank: ${noClass} entries have no \`class\` (the schema requires one)`);
+
+  // --- math: the derived chain, checked, not assumed ---
+  let mathOk = 0, mathPending = 0, altVialCount = 0;
+  const pendingReasons = new Map();
+  for (const e of entries) {
+    const m = e.math;
+    if (!m) continue;
+    if (m.status !== 'ok') {
+      mathPending++;
+      const r = String(m.reason || 'not derivable').slice(0, 70);
+      pendingReasons.set(r, (pendingReasons.get(r) || 0) + 1);
+      continue;
+    }
+    mathOk++;
+    altVialCount += (m.altVials || []).length;
+    for (const c of m.checks) {
+      if (c.ok) continue;
+      // A tier that names a mg total but no mL volume cannot be identified at
+      // all — nothing in the bank can then prove the right vial ships, so that
+      // is a hard FAIL, not debt. A vial mismatch where BOTH sides state their
+      // volume is a different physical product sharing a menu label: derive-math
+      // registers it as an altVial with its own identity, so it is no longer a
+      // contradiction. A units mismatch IS a contradiction inside one sentence,
+      // and an actives mismatch means the entry cannot describe a real vial.
+      if (c.name === 'actives') FAIL(`unified-menu bank: ${e.id} — ${c.detail}`);
+      else if (c.name === 'vial' && /no mL volume|cannot be identified/.test(c.detail))
+        FAIL(`unified-menu bank: ${e.id} — ${c.detail}`);
+      else WARN(`unified-menu bank math debt: ${e.id} ${c.name} — ${c.detail}`);
+    }
+    for (const d of m.debt || []) WARN(`unified-menu bank label debt: ${e.id} — ${d}`);
+  }
+  if (altVialCount) INFO(`unified-menu bank: ${altVialCount} tiers carry a DISTINCT physical vial, registered as altVials with their own identity (they are no longer counted as contradictions against the entry's own vial)`);
+  pendingReasons.forEach((n, r) => WARN(`unified-menu bank: ${n} entries with no derivable math (${r})`));
+
+  // --- override backlog + staleness (debt, not failure) ---
+  const stale = Date.now() / 86400000 - 60;
+  let overrides = 0, staleCount = 0;
+  for (const e of entries) {
+    if (e.sentence || e.sentenceRefill || e.rxOverride) {
+      overrides++;
+      WARN(`unified-menu bank: override debt: ${e.id} (${[e.sentence ? 'sentence' : '', e.sentenceRefill ? 'sentenceRefill' : '', e.rxOverride ? 'rxOverride' : ''].filter(Boolean).join(', ')})`);
+    }
+    if (e.lastVerified && Date.now() / 86400000 - new Date(e.lastVerified).getTime() / 86400000 > stale) {
+      staleCount++;
+      WARN(`unified-menu bank: ${e.id} lastVerified ${e.lastVerified} > 60 days`);
+    }
+  }
+  // An empty override backlog is not "no debt" — the harvest never populates
+  // these fields, so say which it is instead of letting a clean count read as
+  // a clean bank.
+  if (!overrides) INFO('unified-menu bank: override backlog empty because the harvest stores no sentence/rxOverride fields — the SPEC gate 3 is vacuous until it does');
+  INFO(`unified-menu bank: ${entries.length} entries, ${tuples.size} active tuples, math derived for ${mathOk} / pending ${mathPending}, ${staleCount} stale`);
+
+  // --- golden-text gate: the bank AND the built script must match the originals ---
+  const gate = path.join(ROOT, 'src', 'zoho', 'unified-menu', 'harvest', 'gate-golden.js');
+  if (fs.existsSync(gate)) {
+    const r = spawnSync(process.execPath, [gate], { encoding: 'utf8', cwd: path.dirname(gate) });
+    const out = (r.stdout || '') + (r.stderr || '');
+    if (r.status === 0 && /PASS/.test(out)) INFO('unified-menu bank: golden gate PASS (tracking + orderPlaced + reorder + blocks + built artifact byte-identical)');
+    else FAIL('unified-menu bank: golden gate FAILED (exit ' + r.status + '):\n' + out.slice(0, 600));
+  } else {
+    WARN('unified-menu bank: golden gate script missing — skipped');
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Harness sweep (2026-09-27): run every offline _smoketest/verify-*.js.
+//
+// WHY: these harnesses existed but nothing invoked them. A gate nobody runs is
+// decoration — that is exactly how verify-trackbus sat broken (`blobFor is not
+// defined`) for four releases while still being cited as Tracking Bus's gate, and
+// how verify-ohio-meds learned to cry wolf with 4 permanent false failures.
+// Wiring them here means a regression in any of them fails the commit hook.
+//
+// Only pure-Node harnesses: the *.mjs ones drive CDP against a live browser and
+// belong in their own live runs, not in a pre-commit gate.
+// ---------------------------------------------------------------------------
+const HARNESS_SKIP = new Set(['verify-all.js']);
+const harnesses = fs.readdirSync(__dirname)
+  .filter((f) => /^verify-.*\.js$/.test(f) && !HARNESS_SKIP.has(f))
+  .sort();
+const harnessFails = [];
+let harnessPass = 0;
+for (const h of harnesses) {
+  const r = spawnSync(process.execPath, [path.join(__dirname, h)], { encoding: 'utf8', cwd: ROOT, timeout: 60000 });
+  const out = ((r.stdout || '') + (r.stderr || '')).trim();
+  const last = out.split('\n').filter(Boolean).pop() || '(no output)';
+  if (r.error) {
+    harnessFails.push(`${h}: harness crashed (${r.error.code || r.error.message}) — a gate that cannot run guards nothing`);
+  } else if (r.status !== 0) {
+    harnessFails.push(`${h}: FAILED — ${last.slice(0, 160)}`);
+  } else {
+    harnessPass++;
+  }
+}
+if (harnessFails.length) harnessFails.forEach((f) => FAIL('harness sweep: ' + f));
+INFO(`harness sweep: ${harnessPass}/${harnesses.length} offline harnesses green (${harnesses.length - harnessPass} failing)`);
 
 // ---------------------------------------------------------------------------
 // Report

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RxFlow Sale Automator
 // @namespace    jeyson-sale-automator
-// @version      2.19
+// @version      2.34
 // @author       Jeyson Dagondon
 // @description  Auto-drive RxFlow sales from CSV/JSON rows: lookup, consent, products
 // @match        https://staff.exampleclinic.com/*
@@ -11,18 +11,21 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[PSA v2.19] boot');
+console.info('[PSA v2.34] boot');
 
 // --- Script API (R18) — agent-facing status/trigger/output channel ---
 window.__scripts = window.__scripts || {};
 window.__scripts['PSA'] = {
   name: 'RxFlow Sale Automator',
-  version: '2.19',
+  version: '2.33',
   state: 'idle',
   message: '',
   progress: null,
   output: null,
   error: null,
+  // v2.20: pharmacy-routing advisory result for the current row (advisory only
+  // — the flow's own state/message are never overwritten by it).
+  routing: null,
   lastActivity: Date.now(),
   trigger: null
 };
@@ -36,6 +39,7 @@ window.__scripts['PSA'] = {
       if (extra) Object.assign(api, extra);
       if (state === 'error') api.error = message || '';
       if (state === 'done' || state === 'idle') { api.error = null; }
+      renderTrigger(); // the navbar trigger is the state readout while the panel is closed
       console.info(`[PSA] API: ${state}${message ? ' — ' + message : ''}`);
     }
 
@@ -113,6 +117,148 @@ window.__scripts['PSA'] = {
         }
     }
 
+    // ── PSA CATALOG MAPPING (v2.32) — extracted by _smoketest/verify-psa-catalog.js
+    /* ---- Live catalog sweep + fuzzy mapping (v2.32) ----------------------
+       Jeyson 2026-10-02: "it doesnt properly map to the right peptides because
+       the website has pretty shitty naming system... it must have a extract
+       sweep of the peptides in the list so we can fuzzy match".
+       Verified by a live sweep of the picker: the hardcoded CATALOG below has
+       ALREADY drifted — "Fat Loss" and "Fat Loss / Growth Hormone" are EMPTY
+       live (so the aliases tesa / tesa/ipa name products the picker no longer
+       lists), [STK] twins exist for GHK-Cu / BPC-157 / CJC-IPA / NAD+, and the
+       whole GLP1 med type is missing here. So the picker is swept, the sweep
+       becomes the candidate pool, names are fuzzy-matched against it, and a
+       name that is not clearly decided is ASKED, never guessed
+       (DESIGN.md § Data lookup and verification). */
+    const LIVE_CATALOG_KEY = "psa-live-catalog";
+    const LEARNED_ALIAS_KEY = "psa-learned-aliases";
+    const FUZZY_AUTO_MIN = 0.72; // a candidate must clear this to be auto-picked
+    const FUZZY_MARGIN = 0.12;   // ...and beat the runner-up by this much
+
+    function readJsonKey(key, fallback) {
+        try { const v = JSON.parse(localStorage.getItem(key) || ""); return v || fallback; } catch (e) { return fallback; }
+    }
+    function readLiveCatalog() {
+        const v = readJsonKey(LIVE_CATALOG_KEY, null);
+        return (v && Array.isArray(v.rows) && v.rows.length) ? v : null;
+    }
+    function readLearnedAliases() { const v = readJsonKey(LEARNED_ALIAS_KEY, null); return (v && typeof v === "object") ? v : {}; }
+    // A learned alias is Jeyson's own decision, not a guess: once he picks the
+    // peptide for a shorthand, that shorthand resolves outright from then on.
+    function learnAlias(alias, product) {
+        const map = readLearnedAliases();
+        map[String(alias).toLowerCase().trim()] = product;
+        localStorage.setItem(LEARNED_ALIAS_KEY, JSON.stringify(map));
+    }
+    // Candidate pool: the swept picker when a sweep exists, else the hardcoded
+    // catalog. A cold sweep must never disable name resolution.
+    function catalogPool() {
+        const live = readLiveCatalog();
+        if (live) return live.rows.map((r) => ({ medType: r.medType, category: r.category, product: r.product, tab: r.tab || "eRx", live: true }));
+        return Object.keys(PRODUCT_INDEX).map((product) => ({ ...PRODUCT_INDEX[product], tab: "eRx", live: false }));
+    }
+    function poolEntry(product) {
+        const hit = catalogPool().find((p) => p.product === product);
+        return hit ? { medType: hit.medType, category: hit.category, product: hit.product, tab: hit.tab } : null;
+    }
+    function catalogDrift() {
+        const live = readLiveCatalog(); if (!live) return null;
+        const liveNames = new Set(live.rows.map((r) => r.product));
+        const hardNames = new Set(Object.keys(PRODUCT_INDEX));
+        return { ts: live.ts, count: live.rows.length,
+            gone: [...hardNames].filter((n) => !liveNames.has(n)),
+            added: [...liveNames].filter((n) => !hardNames.has(n)) };
+    }
+
+    // Sweep the picker exactly the way goToProduct drives it. Read-only: picking
+    // a product does nothing server-side until "Continue" (Jeyson 2026-10-02).
+    async function sweepLiveCatalog() {
+        const visible = (sel) => [...document.querySelectorAll(sel)].filter((e) => e.offsetParent !== null);
+        const uniq = (arr) => [...new Set(arr.map((e) => (e.innerText || "").trim()).filter(Boolean))];
+        const types = uniq(visible("#medications-list .btn"));
+        if (!types.length) { console.info("[PSA] catalog sweep: no med-type buttons"); return null; }
+        console.info(`[PSA] catalog sweep: ${types.length} med types`, types);
+        const rows = [];
+        for (const medType of types) {
+            const mtEl = visible("#medications-list .btn").find((e) => (e.innerText || "").trim() === medType);
+            if (!mtEl) continue;
+            mtEl.click(); await sleep(1200);
+            const cats = uniq(visible(".med-item"));
+            console.info(`[PSA] sweep ${medType}: ${cats.length} categories`);
+            for (const category of cats) {
+                const catEl = visible(".med-item").find((e) => (e.innerText || "").trim() === category);
+                if (!catEl) continue;
+                catEl.click(); await sleep(700);
+                const tabs = uniq(visible(".col.text-center.cursor-class > div"));
+                for (const tab of (tabs.length ? tabs : ["eRx"])) {
+                    const tabEl = visible(".col.text-center.cursor-class > div").find((e) => (e.innerText || "").trim() === tab);
+                    if (tabEl) { tabEl.click(); await sleep(600); }
+                    for (const product of uniq(visible(".filtered-items .cursor-class.text-break.font-weight-bold"))) {
+                        rows.push({ medType, category, tab, product });
+                    }
+                }
+            }
+        }
+        if (!rows.length) { console.info("[PSA] catalog sweep: picker rendered but no products"); return null; }
+        const stamp = { ts: Date.now(), rows };
+        localStorage.setItem(LIVE_CATALOG_KEY, JSON.stringify(stamp));
+        return stamp;
+    }
+
+    /* ---- Fuzzy name matching ------------------------------------------------
+       Token model: brand tag dropped, form words and units dropped, everything
+       else (- / . ( ) split) kept — INCLUDING doses, because "0.5 mg" and
+       "1 mg" are different products. A token matches exactly (1.0), as a prefix
+       (0.85 — "ipa" for "ipamorelin"), or by bigram similarity (typos). */
+    const FUZZY_DROP = new Set(["injectable", "injection", "inj", "capsules", "capsule", "caps", "solution", "mg", "mcg", "ml", "with", "w/", "w"]);
+    function fuzzyTokens(s) {
+        return String(s).toLowerCase().replace(/^\[[a-z]+\]\s*/, "").replace(/[^a-z0-9+/]+/g, " ")
+            // Doses stay: "0.5 mg" and "1 mg" are DIFFERENT products, so a bare
+            // numeric token counts even when it is one character long.
+            .split(" ").filter((t) => (t.length > 1 || /^\d/.test(t)) && !FUZZY_DROP.has(t));
+    }
+    function bigrams(s) { const out = []; for (let i = 0; i + 1 < s.length; i++) out.push(s.slice(i, i + 2)); return out; }
+    function dice(a, b) {
+        if (a === b) return 1;
+        const A = bigrams(a), B = new Set(bigrams(b));
+        if (!A.length || !B.size) return 0;
+        let hit = 0; for (const g of A) if (B.has(g)) hit++;
+        return (2 * hit) / (A.length + B.size);
+    }
+    function tokenMatch(t, ptoks) {
+        let best = 0;
+        for (const p of ptoks) {
+            if (p === t) return 1;
+            const r = (p.startsWith(t) || t.startsWith(p)) ? 0.85 : dice(t, p);
+            if (r > best) best = r;
+        }
+        return best;
+    }
+    function brandOf(name) { const m = String(name).match(/^\[([a-z]+)\]/i); return m ? m[1].toLowerCase() : null; }
+    function fuzzyCandidates(alias) {
+        const atoks = fuzzyTokens(alias);
+        if (!atoks.length) return [];
+        let scored = catalogPool().map((p) => {
+            const ptoks = fuzzyTokens(p.product);
+            const score = atoks.reduce((a, t) => a + tokenMatch(t, ptoks), 0) / atoks.length;
+            return { medType: p.medType, category: p.category, product: p.product, tab: p.tab, score: Math.round(score * 100) / 100 };
+        }).filter((p) => p.score >= 0.5);
+        const brandHint = brandOf(alias);
+        if (brandHint) { const b = scored.filter((p) => brandOf(p.product) === brandHint); if (b.length) scored = b; }
+        const wantForm = productForm(alias);
+        if (wantForm) { const f = scored.filter((p) => productForm(p.product) === wantForm); if (f.length) scored = f; }
+        return scored.sort((a, b) => b.score - a.score).slice(0, 6);
+    }
+    function fuzzyResolve(alias) {
+        const cands = fuzzyCandidates(alias);
+        if (!cands.length) return { verdict: "unknown", candidates: [] };
+        const top = cands[0];
+        const runner = cands[1] && cands[1].score >= top.score - FUZZY_MARGIN ? cands[1] : null;
+        if (top.score >= FUZZY_AUTO_MIN && !runner) return { verdict: "auto", best: top, candidates: cands };
+        return { verdict: "ambiguous", best: top, candidates: cands };
+    }
+    // ── PSA CATALOG MAPPING END ──
+
     // Shorthand -> exact catalog product name, used to parse the "Purchase"
     // column (e.g. "Tesa/IPA", "Klow"). Keys are matched case-insensitively
     // after trimming. This is a reference table, not logic — extend it as
@@ -135,6 +281,18 @@ window.__scripts['PSA'] = {
         "bpc/kpv/tb500": "[GRE] BPC-157/KPV/TB500",
         "wolverine": "[GRE] Wolverine 1",
         "wolverine 1": "[GRE] Wolverine 1",
+        // v2.20 (Jeyson 2026-09-24): the sheet also writes the Wolverine
+        // variants — "Wolverine Light" and "Wolverine injection"/"Inj" all mean
+        // the same catalog product. Without these entries the name resolver
+        // could NOT save them: it strips a trailing form word only
+        // (injectable/inj/capsules/solution), so "Wolverine injection" ->
+        // "wolverine" and "Wolverine Light" -> "wolverine light", neither of
+        // which equals the catalog name "[GRE] Wolverine 1" — both fell through
+        // to "unmapped" and handed the whole item to the human.
+        "wolverine light": "[GRE] Wolverine 1",
+        "wolverine injection": "[GRE] Wolverine 1",
+        "wolverine inj": "[GRE] Wolverine 1",
+        "wolverine injectable": "[GRE] Wolverine 1",
         "nad+": "[GRE] NAD+ Injectable",
         "nad": "[GRE] NAD+ Injectable",
         "pt-141": "[GRE] PT-141 injectable",
@@ -169,13 +327,212 @@ window.__scripts['PSA'] = {
     // keeps the automation inside the enabled range too.
     const MAX_PEPTIDE_QTY = 3;
 
+    /* ---------------------------------------------------------------------
+       PHARMACY ROUTING (v2.20) — advisory only
+       Mirrors the clinic's availability matrix from the CC Custom Build
+       extractor (`RESTRICTION_MAP` / `PHARMACY_OFFERS` / `MED_RULES` /
+       `COMPONENT_FORMS` there). This script does not PICK a pharmacy — the
+       pharmacy is chosen downstream (LifeFile order creation) — so the matrix
+       is used purely to WARN: "Greenwich and Pharmacy A won't ship this to <state>
+       direct; ship it to Heather (the clinic, CO) instead."
+
+       "Ship to Heather" = the clinic's Colorado address. Sending a
+       state-blocked order to the clinic is standard procedure (Jeyson
+       2026-09), which is why a blocked route is a warning with a known
+       destination, not a dead end.
+
+       Keep these tables in sync with the CC extractor — `_smoketest/
+       verify-psa-v20.js` diffs the shared rows so a matrix edit on one side
+       can't silently drift from the other.
+       --------------------------------------------------------------------- */
+    const CLINIC_STATE = "CO";
+    const CLINIC_NAME = "Heather";
+
+    // Full state name -> abbreviation (the profile header prints the FULL
+    // name: "State : North Carolina").
+    const STATE_ABBR = {
+        "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+        "colorado": "CO", "connecticut": "CT", "delaware": "DE", "district of columbia": "DC",
+        "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID", "illinois": "IL",
+        "indiana": "IN", "iowa": "IA", "kansas": "KS", "kentucky": "KY", "louisiana": "LA",
+        "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI",
+        "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT",
+        "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
+        "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND",
+        "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA",
+        "rhode island": "RI", "south carolina": "SC", "south dakota": "SD", "tennessee": "TN",
+        "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
+        "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY", "puerto rico": "PR"
+    };
+
+    // State -> pharmacies that will NOT ship there. A "(...)" note is a
+    // PARTIAL/conditional restriction. Pharmacy J is unrestricted in all 50 states
+    // and is therefore absent; Pharmacy F / Pharmacy G have no restriction data.
+    const RESTRICTION_MAP = {
+        AL: ["Pharmacy D", "Formulation", "Pharmacy B", "Pharmacy C", "Pharmacy H", "Pharmacy E", "Greenwich"],
+        AK: ["Pharmacy D", "Pharmacy I", "Pharmacy B", "Pharmacy H"],
+        AR: ["Formulation", "Pharmacy I", "Pharmacy B", "Pharmacy E", "Greenwich"],
+        CA: ["Pharmacy D", "Formulation", "Pharmacy I", "Pharmacy B", "Pharmacy C", "Pharmacy H", "Pharmacy E", "Greenwich"],
+        CT: ["Pharmacy D", "Pharmacy H", "Greenwich"],
+        DC: ["Pharmacy C"],
+        DE: ["Greenwich"],
+        GA: ["Greenwich"],
+        HI: ["Pharmacy I", "Pharmacy B"],
+        IL: ["Greenwich"],
+        IN: ["Pharmacy D", "Greenwich"],
+        IA: ["Pharmacy B"],
+        KY: ["Formulation", "Greenwich"],
+        LA: ["Pharmacy D", "Pharmacy B", "Pharmacy C", "Pharmacy E", "Greenwich"],
+        ME: ["Pharmacy I"],
+        MA: ["Pharmacy H", "Pharmacy E", "Pharmacy C (MOTS-c specific)"],
+        MI: ["Pharmacy D", "Formulation", "Pharmacy C", "Greenwich"],
+        MN: ["Greenwich"],
+        MS: ["Pharmacy D", "Pharmacy B", "Pharmacy C", "Pharmacy E", "Greenwich"],
+        MT: ["Pharmacy D", "Pharmacy C"],
+        NE: ["Formulation", "Pharmacy B"],
+        NV: ["Pharmacy D", "Formulation", "Pharmacy E", "Greenwich"],
+        NH: ["Pharmacy H", "Greenwich"],
+        NJ: ["Greenwich"],
+        NM: ["Greenwich"],
+        NC: ["Pharmacy B", "Pharmacy H", "Greenwich"],
+        ND: ["Pharmacy A", "Greenwich"],
+        OH: ["Pharmacy D", "Pharmacy B", "Pharmacy C", "Pharmacy A"],
+        OK: ["Greenwich"],
+        OR: ["Formulation", "Pharmacy E", "Pharmacy B (for Thymosin Alpha-1)"],
+        RI: ["Pharmacy H"],
+        SC: ["Pharmacy D", "Pharmacy B", "Pharmacy E", "Greenwich"],
+        SD: ["Greenwich"],
+        TN: ["Greenwich"],
+        TX: ["Pharmacy D", "Pharmacy I", "Pharmacy C", "Pharmacy H (no injections)"],
+        VT: ["Pharmacy H", "Greenwich"],
+        VA: ["Formulation", "Pharmacy E", "Greenwich"],
+        WA: ["Pharmacy D", "Formulation", "Pharmacy C", "Pharmacy E", "Greenwich"],
+        WV: ["Pharmacy D", "Formulation", "Pharmacy C", "Greenwich"]
+    };
+
+    // Which pharmacies offer each component. "Pharmacy K" is an MDToolbox
+    // pharmacy, not a LifeFile portal. A component missing here has no known
+    // alternative and reads "no availability data" rather than guessing.
+    const PHARMACY_OFFERS = {
+        reta:      ["Pharmacy L"],
+        bpc:       ["Pharmacy L", "Greenwich", "Pharmacy J"],
+        "bpc-kpv": ["Pharmacy J"],
+        kpv:       ["Pharmacy J"],
+        tb:        ["Pharmacy L"],
+        cjc:       ["Greenwich", "Pharmacy A"],
+        ghk:       ["Pharmacy L", "Pharmacy A", "Pharmacy K"],
+        tesa:      ["Pharmacy L"],
+        "tesa-ipa": ["Pharmacy K"],
+        mots:      ["Pharmacy L", "Pharmacy C"],
+        ss31:      ["Pharmacy B", "Pharmacy C"],
+        thymosin:  ["Greenwich", "Pharmacy B"],
+        klow:      ["Greenwich"],
+        wolverine: ["Greenwich", "Pharmacy A"],
+        glow:      ["Pharmacy A", "Pharmacy K"],
+        "slu-pp":  ["Pharmacy J"],
+        nad:       ["Pharmacy L"],
+        sema:      ["Pharmacy A", "Greenwich"],
+        tirz:      ["Pharmacy A", "Greenwich"],
+        // Keys must stay identical to the extractor's PHARMACY_OFFERS (verify-psa-v20
+        // gate). LDN and Tesofensine added 2026-10-01 (Jeyson): LDN is Pharmacy F only —
+        // Pharmacy H on a Functional Medicine care plan, Pharmacy G otherwise — and
+        // Tesofensine is Pharmacy J. Neither is a RxFlow catalog product, so this row
+        // exists to keep the two matrices from drifting, not to route a RxFlow sale.
+        ldn:       ["Pharmacy G", "Pharmacy H"],
+        tesofensine: ["Pharmacy J"]
+    };
+
+    // Components that ship in more than one dosage form AND route differently
+    // per form — the union in PHARMACY_OFFERS above is not what the router
+    // uses for these. Detected from the product name ("… capsules" / "…
+    // injectable"), never guessed: a form the component doesn't come in reads
+    // as unknown rather than borrowing the wrong route.
+    const COMPONENT_FORMS = {
+        bpc: [
+            { form: "Injectable", offers: ["Pharmacy L", "Greenwich"] },
+            { form: "Pill",       offers: ["Pharmacy J"] }
+        ],
+        "bpc-kpv": [{ form: "Pill", offers: ["Pharmacy J"] }],
+        kpv:       [{ form: "Pill", offers: ["Pharmacy J"] }]
+    };
+
+    // Pharmacy B is licensed for SS-31 in THESE states ONLY. Kept verbatim as an
+    // allow-list so it can be diffed straight against the email.
+    const SS31_PROGRESS_LICENSED = ["AZ", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "MA", "MD", "MO", "MT", "NE", "NH", "NJ", "NY", "ND", "OH", "OK", "OR", "PA", "RI", "SD", "TN", "UT", "VT", "WI", "WY"];
+
+    // Med-specific (conditional) restrictions: a pharmacy that is not
+    // hard-blocked in a state still can't ship THESE components there.
+    // `states` is a BLOCK-list unless `mode: 'allow'` flips it to an allow-list.
+    const MED_RULES = [
+        { pharmacy: "Pharmacy C", states: ["MA"], components: ["mots"], label: "MOTS-c specific" },
+        { pharmacy: "Pharmacy B",   states: ["OR"], components: ["thymosin"], label: "Thymosin Alpha-1" },
+        { pharmacy: "Pharmacy B",   states: SS31_PROGRESS_LICENSED, components: ["ss31"], label: "SS-31", mode: "allow" }
+    ];
+
+    // The PSA sale-form catalog product -> routing component. This is the PS
+    // side of the matrix: the extractor routes Care Plan TITLES, this routes
+    // the catalog names the sale form actually lists.
+    //
+    // Products deliberately ABSENT have no availability data in the clinic
+    // matrix (glutathione, DSIP, pinealon/semax, kisspeptin, PT-141,
+    // 5-Amino-1MQ, GHK-Cu/Epithalon and the AOD/MOTs-C/Tesamorelin combos).
+    // They are reported as "no availability data" in the banner — never
+    // silently claimed to be shippable, and never blocking the row.
+    const PRODUCT_COMPONENTS = {
+        "[GRE] Epithalon injectable": "epithalon",
+        "[GRE] GHK-Cu injectable": "ghk",
+        "[GRE] Glutathione injection": "glutathione",
+        "GHK-Cu/Epithalon 10mg/2mg/mL SOLUTION": "ghk-epithalon",
+        "[GRE] 5-Amino 1MQ capsules": "5-amino-1mq",
+        "[GRE] MOTS-C injectable": "mots",
+        "[GRE] MOTs-C/Tesamorelin injectable": "mots-tesa",
+        "[GRE] AOD-9604/MOTs-C/Tesamorelin injectable": "aod-mots-tesa",
+        "[GRE] BPC-157 capsules": "bpc",
+        "[GRE] BPC-157 injectable": "bpc",
+        "[GRE] BPC-157/KPV/TB500": "bpc-kpv",
+        "[GRE] BPC-157/TB-500 capsules": "bpc-tb",
+        "[STK] GLOW": "glow",
+        "[GRE] KLOW": "klow",
+        "[GRE] Wolverine 1": "wolverine",
+        "[STK] TB500 injectable": "tb",
+        "[GRE] CJC/Ipamorelin injectable": "cjc",
+        "[GRE] DSIP injectable": "dsip",
+        "[GRE] DSIP/BPC/CJC injectable": "dsip-bpc-cjc",
+        "[GRE] Kisspeptin injectable": "kisspeptin",
+        "[GRE] PT-141 injectable": "pt141",
+        "[GRE] Pinealon/PE22-28/Selank injectable": "pinealon",
+        "[GRE] Semax/Selank injectable": "semax-selank",
+        "[GRE] Tesamorelin injectable": "tesa",
+        "[GRE] Tesamorelin/Ipamorelin injectable": "tesa-ipa",
+        "[GRE] Thymosin injectable": "thymosin",
+        "[GRE] NAD+ Injectable": "nad"
+    };
+
+    // Components that exist in the PSA catalog but have NO availability data in
+    // the clinic matrix. Reported so the gap is visible instead of looking like
+    // a clean bill of health.
+    const COMPONENT_LABELS = {
+        epithalon: "Epithalon", ghk: "GHK-Cu", glutathione: "Glutathione",
+        "ghk-epithalon": "GHK-Cu/Epithalon", "5-amino-1mq": "5-Amino 1MQ",
+        mots: "MOTS-c", "mots-tesa": "MOTs-C/Tesamorelin",
+        "aod-mots-tesa": "AOD-9604/MOTs-C/Tesamorelin",
+        bpc: "BPC-157", "bpc-kpv": "BPC-157/KPV/TB500", "bpc-tb": "BPC-157/TB-500",
+        glow: "Glow Blend", klow: "KLOW", wolverine: "Wolverine", tb: "TB-500",
+        cjc: "CJC-1295/Ipamorelin", dsip: "DSIP", "dsip-bpc-cjc": "DSIP/BPC/CJC",
+        kisspeptin: "Kisspeptin", pt141: "PT-141", pinealon: "Pinealon/PE22-28/Selank",
+        "semax-selank": "Semax/Selank", tesa: "Tesamorelin", "tesa-ipa": "Tesamorelin/Ipamorelin",
+        thymosin: "Thymosin Alpha-1", nad: "NAD+", reta: "Retatrutide",
+        sema: "Semaglutide", tirz: "Tirzepatide", ss31: "SS-31"
+    };
+
     // Safe default answers for the sale-form questionnaire. The questionnaire
     // is one adaptive form — which question groups render depends on the
     // products in the cart (verified live: KLOW/Tesa add healing+GH groups,
     // BPC/NAD+ add more). Every checkbox group carries a "None of the above" /
     // "No known allergies" option and Yes/No radios, so these generic rules
     // cover every product's questionnaire. The script PREFILLS these but NEVER
-    // submits — a human must review and click Submit (handleExistingPatientQuestionnaire).
+    // submits and NEVER skips — a human must review and click Submit
+    // (prefillSaleQuestionnaire; single path since v2.20).
     const QUESTIONNAIRE_SAFE_OPTIONS = {
         // Radio groups: click the first option whose label matches (in order).
         // v2.0: added "No to both", "Not sure yet", "Stay at Same dose",
@@ -260,6 +617,399 @@ window.__scripts['PSA'] = {
     const normalizeQuestionKey = (s) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
     // Tolerant option-label comparison (trim + collapse whitespace).
     const normLabel = (s) => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+    /* =========================================================================
+       SECTION 1b — PHARMACY ROUTING ENGINE (advisory)
+       Pure functions over the tables above — no DOM. Returns plain data so the
+       panel and any harness can render/inspect the same result.
+       ========================================================================= */
+
+    const normPharm = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+    /* ---------------------------------------------------------------------
+       PREVIOUS-QUESTIONNAIRE CHECK (v2.20) — informational only
+       Jeyson 2026-09-24: "Autofill either way. Just let me know whether or not
+       there was a previous questionnaire."
+
+       So this changes NO behaviour: the sale-form questionnaire is autofilled
+       whether or not one exists before. It only REPORTS the history on the
+       profile page so the pharmacist can see it. Verified live 2026-09-24 on
+       patient 351792 (the tab's own XHR is the source of the endpoints):
+         GET /api/getPatientQuestionnariesHeaderValues/<id>
+             -> {"code":"success","questionData":{"height":"5'3\"","weight":207}}
+         GET /api/getPatientQuestionnaries/<id>
+             -> paginated records: {id, template_id, patient_id, answers, status, ...}
+         GET /api/getFunnelQuestionnaireList
+             -> the template catalogue (13667 Dr. Example Product Questionnaire /
+                source 1036, 13666 Renewal / 1029, 15527 Weborder / 1028)
+       NOTE: the sale-form questionnaire itself is a Vue `formRender` component
+       (submit form id "questionnare-form") rendered inside a modal, NOT a form
+       in the parent document — and this profile tab only carries an empty
+       `#funnelQuestionnaireFrame` iframe. Nothing here touches the form.
+       --------------------------------------------------------------------- */
+    const QUESTIONNAIRE_HISTORY_URL = (pid) => "/api/getPatientQuestionnaries/" + encodeURIComponent(pid);
+
+    // Patient id from the profile URL (/patient-details/<id>, /patient-sales/<id>).
+    function patientIdFromUrl() {
+        const m = location.pathname.match(/^\/patient-(?:details|sales)\/(\d+)/);
+        return m ? m[1] : "";
+    }
+
+    // PURE: normalize the /api/getPatientQuestionnaries response. No DOM, no
+    // fetch — so the harness can exercise every shape (empty, paginated,
+    // missing/odd fields) without a live page.
+    function parseQuestionnaireHistory(json) {
+        if (!json || typeof json !== "object") return { ok: false, reason: "no response body" };
+        const rows = Array.isArray(json.data) ? json.data : [];
+        return {
+            ok: true,
+            total: typeof json.total === "number" ? json.total : rows.length,
+            records: rows.map((r) => {
+                let answers = [];
+                try { answers = JSON.parse(r.answers || "[]"); } catch (e) { answers = []; }
+                if (!Array.isArray(answers)) answers = [];
+                return {
+                    id: r.id,
+                    templateId: r.template_id,
+                    status: r.status || "",
+                    submittedAt: r.submitted_at || r.updated_at || r.created_at || "",
+                    answerCount: answers.length
+                };
+            })
+        };
+    }
+
+    // Fetch the patient's questionnaire records. Read-only GET, same-origin, so
+    // the session cookies already authorize it (verified live 2026-09-24: the
+    // records tab fetches exactly this URL, and it appears in the page's own
+    // resource log). Never throws: any failure returns { ok:false } and the
+    // panel says the check could not be made rather than implying "no previous
+    // questionnaire" (which would be a lie).
+    async function fetchQuestionnaireHistory(patientId) {
+        if (!patientId) return { ok: false, reason: "no patient id in the URL" };
+        try {
+            const res = await fetch(QUESTIONNAIRE_HISTORY_URL(patientId), {
+                credentials: "same-origin",
+                headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" }
+            });
+            if (!res.ok) return { ok: false, reason: "HTTP " + res.status };
+            return parseQuestionnaireHistory(await res.json());
+        } catch (err) {
+            return { ok: false, reason: err && err.message ? err.message : String(err) };
+        }
+    }
+
+    // Template id -> name, from the app's own catalogue endpoint.
+    async function fetchQuestionnaireTemplates() {
+        try {
+            const res = await fetch("/api/getFunnelQuestionnaireList", {
+                credentials: "same-origin",
+                headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" }
+            });
+            if (!res.ok) return {};
+            const json = await res.json();
+            const map = {};
+            for (const q of (json && json.questionaires) || []) map[String(q.id)] = q.title;
+            return map;
+        } catch (err) {
+            return {};
+        }
+    }
+
+    // Renders the history line(s) into the current panel body (never wipes it).
+    function renderQuestionnaireHistory(history, templates, panel) {
+        const wrap = document.createElement("div");
+        wrap.style.cssText = "margin-top:6px;padding-top:6px;border-top:1px dashed var(--ds-border, #e8e2d8);";
+        const head = document.createElement("div");
+        head.style.cssText = "font-weight:bold;";
+        wrap.appendChild(head);
+
+        if (!history.ok) {
+            head.textContent = "Previous questionnaire: could not check (" + history.reason + ")";
+            head.style.color = "var(--ds-muted, #7a7163)";
+            panel.body.appendChild(wrap);
+            console.warn("[PSA] questionnaire history check failed:", history.reason);
+            return { found: null, message: "check failed: " + history.reason };
+        }
+
+        if (!history.total) {
+            head.textContent = "Previous questionnaire: NONE on file";
+            head.style.color = "var(--ds-warn, #a16207)";
+            const note = document.createElement("div");
+            note.textContent = "No prior Dr. Example Product Questionnaire for this patient — the sale form's questionnaire is still autofilled.";
+            note.style.color = "var(--ds-muted, #7a7163)";
+            wrap.appendChild(note);
+            panel.body.appendChild(wrap);
+            console.info("[PSA] previous questionnaire: none on file for this patient");
+            return { found: false, message: "none on file" };
+        }
+
+        head.textContent = "Previous questionnaire: " + history.total + " on file";
+        head.style.color = "var(--ds-success, #3d7a46)";
+        for (const rec of history.records) {
+            const line = document.createElement("div");
+            const name = templates[String(rec.templateId)] || ("template " + rec.templateId);
+            const when = rec.submittedAt ? String(rec.submittedAt).replace("T", " ").slice(0, 16) : "no date";
+            line.textContent = "• " + name + " — " + (rec.status || "?") + " · " + when + " · " + rec.answerCount + " answers";
+            line.style.color = "var(--ds-muted, #7a7163)";
+            wrap.appendChild(line);
+        }
+        panel.body.appendChild(wrap);
+        console.info("[PSA] previous questionnaire: " + history.total + " on file — " + history.records.map((r) => (templates[String(r.templateId)] || r.templateId) + "/" + r.status).join(", "));
+        return { found: true, message: history.total + " on file" };
+    }
+
+
+    // Normalize a state value to its 2-letter abbreviation, or "" when it is
+    // neither a known full name nor a 2-letter code. Never guesses: an
+    // unrecognized value returns "" so the advisory says "state not readable"
+    // instead of routing on a wrong state.
+    function normalizeStateAbbr(value) {
+        const clean = String(value || "").replace(/\s+/g, " ").trim();
+        if (!clean) return "";
+        if (/^[A-Za-z]{2}$/.test(clean)) return clean.toUpperCase();
+        return STATE_ABBR[clean.toLowerCase()] || "";
+    }
+
+    // Pharmacy-name match tolerant of the matrix's aliases: the same pharmacy
+    // is "Pharmacy B" in the offering lists but "Pharmacy B" in the
+    // restriction map. Mirrors the extractor's `pharmMatches`.
+    function pharmMatches(a, b) {
+        const x = normPharm(a), y = normPharm(b);
+        if (!x || !y) return false;
+        return x === y || x.includes(y) || y.includes(x);
+    }
+
+    // Hard-restricted pharmacies for a state (full entries only — a "(...)"
+    // note marks a conditional/partial restriction).
+    function hardRestrictedPharmacies(stateAbbr) {
+        return (RESTRICTION_MAP[stateAbbr] || []).filter((n) => !/\(/.test(n));
+    }
+    function pharmacyHardRestricted(pharm, stateAbbr) {
+        return hardRestrictedPharmacies(stateAbbr).some((n) => pharmMatches(n, pharm));
+    }
+    function pharmacyMedRestricted(pharm, stateAbbr, componentKey) {
+        return MED_RULES.some((r) => {
+            if (!pharmMatches(r.pharmacy, pharm) || !r.components.includes(componentKey)) return false;
+            const listed = r.states.includes(stateAbbr);
+            return r.mode === "allow" ? !listed : listed;
+        });
+    }
+
+    // Dosage form named by a catalog product name, or "" when it doesn't say.
+    // Only the words at the END of the name count, so a combo product doesn't
+    // tag its components with the wrong form.
+    // NOTE: named `routingFormFor`, not `productForm` — the v2.19 name resolver
+    // below already owns `productForm` (returns the PRODUCT_FORM_RULES
+    // canonical) and a second declaration would silently shadow it.
+    function routingFormFor(product) {
+        const s = String(product || "").toLowerCase();
+        if (/\bcapsules?\b|\bpills?\b|\btablets?\b/.test(s)) return "Pill";
+        if (/\binjectable\b|\binjection\b|\bsolution\b|\binj\b/.test(s)) return "Injectable";
+        return "";
+    }
+
+    // Routing component for a catalog product, or null when the clinic matrix
+    // has no entry for it.
+    function componentForProduct(product) {
+        return PRODUCT_COMPONENTS[product] || null;
+    }
+
+    // Worst-first severity order, matching the extractor.
+    const RX_STATUS_ORDER = ["blocked", "clinic", "partial", "ok", "unknown"];
+
+    // Status for ONE offering list in the patient's state.
+    //   ok      — at least one pharmacy ships direct and none are blocked
+    //   partial — some blocked, but a direct route still exists
+    //   clinic  — every offering pharmacy is blocked here, but CO (Heather) is
+    //             not, i.e. ship it to the clinic
+    //   blocked — blocked here AND in CO: nowhere to send it
+    function offersStatus(offering, componentKey, stateAbbr) {
+        const blocked = [], ok = [], viaClinic = [];
+        for (const ph of offering) {
+            const isBlocked = pharmacyHardRestricted(ph, stateAbbr) || pharmacyMedRestricted(ph, stateAbbr, componentKey);
+            if (!isBlocked) { ok.push(ph); continue; }
+            blocked.push(ph);
+            if (!pharmacyHardRestricted(ph, CLINIC_STATE) && !pharmacyMedRestricted(ph, CLINIC_STATE, componentKey)) {
+                viaClinic.push(ph);
+            }
+        }
+        const status = !blocked.length ? "ok"
+            : ok.length ? "partial"
+            : viaClinic.length ? "clinic" : "blocked";
+        return { status, blocked, ok, viaClinic };
+    }
+
+    // Status for ONE component in the patient's state. Multi-form components
+    // have their form taken from the product name; the top-level status is the
+    // WORST form so the row still warns.
+    function componentStatus(componentKey, stateAbbr, formName) {
+        const forms = COMPONENT_FORMS[componentKey];
+        if (!PHARMACY_OFFERS[componentKey] && !forms) {
+            return { status: "unknown", blocked: [], ok: [], viaClinic: [] };
+        }
+        if (forms && forms.length) {
+            const only = formName
+                ? forms.find((f) => f.form === formName)
+                : (forms.length === 1 ? forms[0] : null);
+            if (formName && !only) {
+                // The product named a form this component doesn't come in.
+                return { status: "unknown", blocked: [], ok: [], viaClinic: [], form: formName };
+            }
+            if (only) {
+                const r = offersStatus(only.offers, componentKey, stateAbbr);
+                return (formName && forms.length > 1) ? Object.assign(r, { form: only.form }) : r;
+            }
+            const per = forms.map((f) => Object.assign({ form: f.form }, offersStatus(f.offers, componentKey, stateAbbr)));
+            const worst = per.reduce((a, b) =>
+                RX_STATUS_ORDER.indexOf(b.status) < RX_STATUS_ORDER.indexOf(a.status) ? b : a);
+            return {
+                status: worst.status,
+                blocked: per.flatMap((p) => p.blocked),
+                ok: per.flatMap((p) => p.ok),
+                viaClinic: per.flatMap((p) => p.viaClinic),
+                forms: per
+            };
+        }
+        return offersStatus(PHARMACY_OFFERS[componentKey], componentKey, stateAbbr);
+    }
+
+    // Advisory report for a purchase string in a state.
+    // Returns { status: "no-state" } when no state could be read, and
+    // { status: "nothing-routable" } when no purchase item maps to the matrix,
+    // so the caller renders no banner rather than an empty or misleading one.
+    function routingReport(purchase, stateAbbr) {
+        const state = normalizeStateAbbr(stateAbbr);
+        if (!state) return { status: "no-state", state: "", rows: [] };
+
+        const { items } = parsePurchase(purchase || "");
+        const seen = new Set();
+        const rows = [];
+        for (const it of items) {
+            const byAlias = PRODUCT_INDEX[it.alias];
+            const product = it.product || (byAlias ? byAlias.product : "");
+            const key = componentForProduct(product) || componentForProduct(it.alias);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            const formName = routingFormFor(product || "");
+            const st = componentStatus(key, state, formName);
+            rows.push({
+                key,
+                label: (COMPONENT_LABELS[key] || key) + (st.form ? " (" + st.form + ")" : ""),
+                status: st.status,
+                blocked: st.blocked,
+                ok: st.ok,
+                viaClinic: st.viaClinic,
+                forms: st.forms
+            });
+        }
+        if (!rows.length) return { status: "nothing-routable", state, rows };
+        let level = "ok";
+        for (const w of RX_STATUS_ORDER) { if (rows.some((r) => r.status === w)) { level = w; break; } }
+        return { status: level, state, rows };
+    }
+
+    function routingNeedsAttention(report) {
+        return !!report && ["blocked", "clinic", "partial"].includes(report.status);
+    }
+
+    // Severity order for DISPLAY — most-restrictive first. Same order as
+    // RX_STATUS_ORDER except unknown last (it is a data gap, not a block).
+    const ROUTING_DISPLAY_ORDER = { blocked: 0, clinic: 1, partial: 2, ok: 3, unknown: 4 };
+    const ROUTING_COLOR = {
+        blocked: "var(--ds-danger, #b3402e)",
+        clinic:  "var(--ds-warn, #a16207)",
+        partial: "var(--ds-warn, #a16207)",
+        ok:      "var(--ds-success, #3d7a46)",
+        unknown: "var(--ds-muted, #7a7163)"
+    };
+
+    // One-line, non-nesting rendering of a routing status (the extractor nests
+    // an outline under each Care Plan title; the PSA panel is 340px wide, so the
+    // same facts go on one wrapped line).
+    //   ok       ✓ BPC-157 — Direct: Pharmacy L, Greenwich
+    //   partial  ⚠ Tirzepatide — no OH direct · ship to Heather (CO): Pharmacy A, Greenwich
+    //   clinic   ⚠ KLOW — nothing ships to WA direct · ship to Heather (CO): Greenwich
+    //   blocked  ⛔ Thymosin — restricted in ND AND CO — no route
+    function routingRowText(row, state) {
+        const label = row.label;
+        if (row.status === "ok") return "✓ " + label + " — Direct: " + row.ok.join(", ");
+        if (row.status === "unknown") return "? " + label + " — no availability data";
+        if (row.status === "blocked") return "⛔ " + label + " — restricted in " + state + " AND " + CLINIC_STATE + " — no route";
+        const dest = row.viaClinic.length ? row.viaClinic.join(", ") : (row.blocked.join(", ") || "the blocked pharmacy");
+        if (row.status === "partial") {
+            return "⚠ " + label + " — no " + state + " direct for " + row.blocked.join(", ")
+                + " · ship " + dest + " to " + CLINIC_NAME + " (" + CLINIC_STATE + ") · Direct: " + row.ok.join(", ");
+        }
+        return "⚠ " + label + " — nothing ships to " + state + " direct · ship " + dest + " to " + CLINIC_NAME + " (" + CLINIC_STATE + ")";
+    }
+
+    // Renders the advisory into the CURRENT panel body (never wipes it) and
+    // records it on the API channel. Advisory only: the pharmacy is picked
+    // downstream, so nothing here blocks or changes the sale.
+    // NOTE: deliberately does NOT call apiSet — the panel status line belongs
+    // to the consent/questionnaire step that is running. The advisory rides
+    // `api.routing` instead, so an agent can read it without the flow's own
+    // state being overwritten.
+    function renderRoutingAdvisory(job, panel, stateOverride) {
+        try {
+            const state = stateOverride || job.state || (job.row && job.row.patientState) || "";
+            const report = routingReport(job.row && job.row.purchase, state);
+            const needsAttention = routingNeedsAttention(report);
+            job.routing = {
+                status: report.status,
+                state: report.state || "",
+                needsAttention,
+                rows: report.rows.map((r) => ({ key: r.key, label: r.label, status: r.status, blocked: r.blocked, ok: r.ok, viaClinic: r.viaClinic }))
+            };
+            saveJob(job);
+            api.routing = job.routing;
+
+            // No state read -> say so; a silent banner would look like a clean
+            // routing result when nothing was actually checked.
+            if (report.status === "no-state") {
+                const note = document.createElement("div");
+                note.style.cssText = "margin-top:6px;font-weight:bold;color:" + ROUTING_COLOR.unknown;
+                note.textContent = "⚠ Pharmacy routing not checked — the patient's SHIPPING address state could not be read"
+                    + (job.stateHint ? " (the profile header says " + job.stateHint + ", which is the patient's own state, not where this ships)" : "")
+                    + ". Verify the route manually before choosing a pharmacy.";
+                panel.body.appendChild(note);
+                console.warn("[PSA] routing: patient state not readable — routing not checked");
+                return job.routing;
+            }
+            if (report.status === "nothing-routable") {
+                console.info("[PSA] routing: no routable product in the purchase column — nothing to check");
+                return job.routing; // stay silent rather than imply a check happened
+            }
+
+            const wrap = document.createElement("div");
+            wrap.style.cssText = "margin-top:7px;padding-top:6px;border-top:1px dashed var(--ds-border, #e8e2d8);";
+            const head = document.createElement("div");
+            head.style.cssText = "font-weight:bold;color:" + (needsAttention ? ROUTING_COLOR.partial : ROUTING_COLOR.ok);
+            head.textContent = "Pharmacy routing (ships to " + report.state + ") — "
+                + (needsAttention ? "check before picking a pharmacy" : "no state restrictions found");
+            wrap.appendChild(head);
+
+            const sorted = report.rows.slice().sort((a, b) => ROUTING_DISPLAY_ORDER[a.status] - ROUTING_DISPLAY_ORDER[b.status]);
+            for (const row of sorted) {
+                const line = document.createElement("div");
+                line.style.cssText = "margin-top:2px;color:" + (ROUTING_COLOR[row.status] || ROUTING_COLOR.unknown);
+                if (row.status === "partial" || row.status === "clinic") line.style.fontWeight = "bold";
+                line.textContent = routingRowText(row, report.state);
+                wrap.appendChild(line);
+            }
+            panel.body.appendChild(wrap);
+
+            // Console line: the whole report in one grep-able place (the panel
+            // is transient; a mis-route investigation needs a durable record).
+            console.info(`[PSA] routing ${report.state} ${report.status} — ` + sorted.map((r) => `${r.label}:${r.status}[${r.blocked.join("/")}|direct:${r.ok.join("/")}|clinic:${r.viaClinic.join("/")}]`).join("; "));
+            return job.routing;
+        } catch (err) {
+            // Advisory must never take the row down.
+            console.warn("[PSA] routing advisory failed", err);
+            return null;
+        }
+    }
     // Fisher–Yates shuffle + random count 1..N — never an empty subset, so a
     // required explicit question is always answered (v2.1 randomization).
     function randomSubset(options) {
@@ -350,16 +1100,19 @@ window.__scripts['PSA'] = {
     // (Jeyson, 2026-08-18 — do not "fix" this semantics back into a profile
     // check. A non-empty value, e.g. "YES - Do Not Resend Intake", means the
     // patient has ordered BEFORE and a sale was already created for them, so
-    // there is no need to SEND them another intake questionnaire — which is
-    // exactly why the automator fills the questionnaire FOR them (prefill
-    // from their profile, human reviews + presses Submit). Blank = new
-    // patient (no prior order/sale) → auto-skip the questionnaire.
+    // there is no need to SEND them another intake questionnaire. Blank = no
+    // prior order/sale.
     // CRITICAL: the column records PRIOR-SALE status, NOT mere existence in
     // RxFlow — finding a profile in the search does NOT imply a prior
     // sale, so never derive existingPatient from profile-check results.
-    // This column is the SINGLE source of truth for the skip decision
-    // (v2.12; the profile-check pass used to overwrite it — that was the
-    // auto-skip regression).
+    // v2.20 — THE COLUMN NO LONGER DECIDES ANYTHING. It used to be the sole
+    // input to "skip the questionnaire?" (v2.12), which was wrong twice over:
+    // the sale-form questionnaire is fetched per-sale from the CART's drug ids,
+    // not from patient history, and a Skip click REMOVES the form. The script
+    // now observes whether a questionnaire rendered and always autofills it
+    // (Jeyson 2026-09-24: "never skip, always autofill"). The field is still
+    // parsed and still shown to the pharmacist — it is useful context about
+    // whether the patient has ordered before — but nothing branches on it.
     const FIXED_HEADER_ORDER = [
         "Patient Name", "Patient Email", "Phone", "Intake Link",
         "RxFlow Patient ID", "Purchase", "Current Healing/GH peptides",
@@ -770,10 +1523,12 @@ window.__scripts['PSA'] = {
     function resolveCatalogProduct(aliasText) {
         const direct = PRODUCT_ALIASES[String(aliasText).toLowerCase()];
         if (direct && PRODUCT_INDEX[direct]) return direct;
+        const learned = readLearnedAliases()[String(aliasText).toLowerCase().trim()];
+        if (learned && catalogPool().some((p) => p.product === learned)) return learned;
         const target = normProductName(aliasText);
         const core = stripProductForm(aliasText);
         if (core.length < 3) return null;
-        const hits = Object.keys(PRODUCT_INDEX).filter((p) => normProductName(p) === target || stripProductForm(p) === core);
+        const hits = catalogPool().map((p) => p.product).filter((p) => normProductName(p) === target || stripProductForm(p) === core);
         if (hits.length === 1) return hits[0];
         if (hits.length > 1) {
             const wantForm = productForm(aliasText);
@@ -794,6 +1549,7 @@ window.__scripts['PSA'] = {
         const items = [];
         const unmapped = [];
         const autoMatched = [];
+        const ambiguous = []; // v2.32: fuzzy matched but not clearly decided — Jeyson picks
 
         for (const part of parts) {
             // "3 Tesa/IPA" -> qty 3, alias "Tesa/IPA". A part with NO leading
@@ -815,17 +1571,27 @@ window.__scripts['PSA'] = {
             // so shorthand ending in a period still resolves.
             rawAlias = rawAlias.replace(/[.,;:]+$/, "");
             const productName = resolveCatalogProduct(rawAlias);
+            const effectiveQty = Math.min(qty, MAX_PEPTIDE_QTY);
             if (!productName) {
-                unmapped.push(part);
+                // v2.32: second chance against the LIVE picker. A clear winner is
+                // auto-picked and reported; anything close is ASKED, never guessed.
+                const fz = fuzzyResolve(rawAlias);
+                if (fz.verdict === "auto") {
+                    autoMatched.push({ alias: rawAlias, product: fz.best.product, via: `fuzzy ${fz.best.score}` });
+                    items.push({ qty: effectiveQty, requestedQty: qty, capped: qty > effectiveQty, alias: rawAlias, ...poolEntry(fz.best.product) });
+                } else if (fz.verdict === "ambiguous") {
+                    ambiguous.push({ alias: rawAlias, part, qty: effectiveQty, requestedQty: qty, capped: qty > effectiveQty, candidates: fz.candidates });
+                } else {
+                    unmapped.push(part);
+                }
                 continue;
             }
             // Distinguish a safety-net match from a real alias hit so the panel
             // and console can report what was auto-resolved by name (v2.19).
             if (PRODUCT_ALIASES[rawAlias.toLowerCase()] !== productName) autoMatched.push({ alias: rawAlias, product: productName });
-            const effectiveQty = Math.min(qty, MAX_PEPTIDE_QTY);
-            items.push({ qty: effectiveQty, requestedQty: qty, capped: qty > effectiveQty, alias: rawAlias, ...PRODUCT_INDEX[productName] });
+            items.push({ qty: effectiveQty, requestedQty: qty, capped: qty > effectiveQty, alias: rawAlias, ...poolEntry(productName) });
         }
-        return { items, unmapped, autoMatched };
+        return { items, unmapped, autoMatched, ambiguous };
     }
 
     /* =========================================================================
@@ -928,28 +1694,284 @@ window.__scripts['PSA'] = {
         return false;
     }
 
-    async function waitForSearchMatches(query, timeoutMs = 5000, pollMs = 300) {
-        const start = Date.now();
-        while (Date.now() - start < timeoutMs) {
-            const resultRows = getSearchRows();
-            const matches = resultRows.filter((r) => r.textContent.toLowerCase().includes(query.toLowerCase()));
-            if (matches.length > 0) return matches;
-            await sleep(pollMs);
+    // ── PSA PATIENT IDENTITY (v2.30) ──────────────────────────────────────────
+    // Pure functions: no DOM, no globals. They exist because the Patients search
+    // is a FUZZY SUBSTRING search and its row count is NOT an answer. On the real
+    // 2026-10-02 queue, "Emiliano Sampleperson" returned 0 rows while the lone
+    // surname "Sampleperson" returned exactly ONE row — "Lara Sampleperson" — and the
+    // old rule "exactly one row = found" opened her profile for his order.
+    // Identity is decided here, never by a row count.
+    // Harness: _smoketest/verify-psa-lookup.js (live probe: probe-psa-lookup.mjs)
+    function psaCleanIdentifier(v) {
+        return String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+    }
+
+    function psaNameTokens(s) {
+        return psaCleanIdentifier(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter((t) => t.length > 0);
+    }
+
+    // A name verifies only on an EXACT token-set match against a full
+    // first+last name. A missing token ("Sampleperson" vs "Emiliano Sampleperson") or
+    // an extra one ("Lara Sampleperson") is a different person until a human says
+    // otherwise — this is the check that stops the wrong-patient send.
+    function psaNameVerdict(resultName, expectedName) {
+        const want = psaNameTokens(expectedName);
+        if (want.length < 2) return { ok: false, reason: `"${psaCleanIdentifier(expectedName)}" is not a full first+last name` };
+        const got = psaNameTokens(resultName);
+        if (got.length === 0) return { ok: false, reason: "the result row shows no name" };
+        const missing = want.filter((t) => got.indexOf(t) === -1);
+        if (missing.length) return { ok: false, reason: `the result row is missing "${missing.join(" ")}"` };
+        const extra = got.filter((t) => want.indexOf(t) === -1);
+        if (extra.length) return { ok: false, reason: `the result row has an unexpected name part "${extra.join(" ")}"` };
+        return { ok: true, reason: "" };
+    }
+
+    function psaPhoneDigits(v) {
+        const d = String(v == null ? "" : v).replace(/\D/g, "");
+        return d.length >= 10 ? d.slice(-10) : "";
+    }
+
+    function psaPhoneVerdict(resultPhone, expectedPhone) {
+        const want = psaPhoneDigits(expectedPhone);
+        if (!want) return { applicable: false, ok: false, reason: "this row has no phone to compare" };
+        const got = psaPhoneDigits(resultPhone);
+        if (!got) return { applicable: false, ok: false, reason: "the result row shows no phone" };
+        if (got !== want) return { applicable: true, ok: false, reason: `the result row's phone ${got} is not ${want}` };
+        return { applicable: true, ok: true, reason: "" };
+    }
+
+    // A rendered result row reads
+    //   "PAT123456789 Lara Sampleperson 1970-01-01 0000000000 Action View Patient"
+    // The action buttons' text must never leak into the name.
+    function psaParseSearchRowText(text) {
+        const t = psaCleanIdentifier(text);
+        const idRaw = (t.match(/PAT\s*\d+/i) || [""])[0];
+        const dob = (t.match(/\d{4}-\d{2}-\d{2}/) || [""])[0];
+        const phone = (t.match(/\b\d{7,}\b/) || [""])[0];
+        let name = t;
+        [idRaw, dob, phone].filter(Boolean).forEach((part) => { name = name.replace(part, " "); });
+        name = name.replace(/\bAction\b/ig, " ").replace(/\bView\s*Patient\b/ig, " ").replace(/\s+/g, " ").trim();
+        return { id: idRaw.replace(/\s+/g, ""), name, dob, phone };
+    }
+
+    // What we may search by, strongest first. Email is deliberately ABSENT: the
+    // Patients search ignores it (proved live 2026-10-02 —
+    // "patient@example.com" returns 0 rows), so searching it can only
+    // manufacture a false "no profile" that deletes a real patient's row. A name
+    // needs two tokens; a lone surname or first name is never searched.
+    function psaCandidateList(row) {
+        const out = [];
+        const id = psaCleanIdentifier(row.patientId);
+        if (id) out.push({ key: "patientId", label: "RxFlow Patient ID", value: id });
+        const phone = psaCleanIdentifier(row.phone);
+        if (phone) out.push({ key: "phone", label: "Phone", value: phone });
+        const name = psaCleanIdentifier(row.patientName);
+        if (name && psaNameTokens(name).length >= 2) out.push({ key: "name", label: "Patient Name", value: name });
+        return out;
+    }
+
+    // Verify ONE returned row against the queue row we are looking for.
+    //   { status: "found" | "ambiguous", reason }
+    function psaVerifyCandidate(input) {
+        const parsed = input.parsed || {};
+        const row = input.row || {};
+        const value = psaCleanIdentifier(input.identifierValue);
+        const hasFullName = psaNameTokens(row.patientName).length >= 2;
+
+        if (input.identifierKey === "patientId") {
+            if (psaCleanIdentifier(parsed.id) !== value) return { status: "ambiguous", reason: `the result row's ID ${parsed.id || "(none)"} is not ${value}` };
+            if (hasFullName) {
+                const nv = psaNameVerdict(parsed.name, row.patientName);
+                if (!nv.ok) return { status: "ambiguous", reason: nv.reason };
+            }
+            return { status: "found", reason: "" };
         }
-        return [];
+        if (input.identifierKey === "phone") {
+            const pv = psaPhoneVerdict(parsed.phone, row.phone);
+            if (!pv.ok) return { status: "ambiguous", reason: pv.reason };
+            if (hasFullName) {
+                const nv = psaNameVerdict(parsed.name, row.patientName);
+                if (!nv.ok) return { status: "ambiguous", reason: nv.reason };
+            }
+            return { status: "found", reason: "" };
+        }
+        if (input.identifierKey === "name") {
+            const nv = psaNameVerdict(parsed.name, row.patientName);
+            if (!nv.ok) return { status: "ambiguous", reason: nv.reason };
+            if (psaPhoneDigits(row.phone)) {
+                const pv = psaPhoneVerdict(parsed.phone, row.phone);
+                if (!pv.ok) return { status: "ambiguous", reason: pv.reason };
+            }
+            return { status: "found", reason: "" };
+        }
+        return { status: "ambiguous", reason: `unknown identifier "${input.identifierKey}"` };
+    }
+
+    // The verdict for a whole lookup, from the PER-CANDIDATE evidence. `results`
+    // is [{ label, key, value, fired, reason?, rows: [{ parsed, verdict }] }].
+    // Safety rules:
+    //   - fired:false     -> error. A search that never ran must never be read
+    //                        as "no profile" — that deletes a real row.
+    //   - fired + 0 rows  -> a proven miss; keep trying other identifiers.
+    //   - rows that fail verification -> ambiguous, NEVER not-found.
+    //   - not-found is reachable only when EVERY attempted search was proven and
+    //     returned no rows at all.
+    function psaDecideLookup(results) {
+        let sawRows = false;
+        let last = null;
+        for (const r of (results || [])) {
+            if (!r.fired) return { status: "error", message: r.reason || `the Patients search never ran for "${r.value}"` };
+            const rows = r.rows || [];
+            if (rows.length === 0) continue;
+            sawRows = true;
+            const hits = rows.filter((x) => x.verdict && x.verdict.status === "found");
+            if (hits.length === 1) return { status: "found", foundBy: r.label, hit: hits[0], parsed: hits[0].parsed };
+            if (hits.length > 1) return { status: "ambiguous", foundBy: r.label, reason: `${hits.length} rows match this patient`, candidates: hits };
+            last = { foundBy: r.label, reason: (rows[0].verdict && rows[0].verdict.reason) || "no returned row matches this patient", candidates: rows };
+        }
+        if (sawRows && last) return { status: "ambiguous", foundBy: last.foundBy, reason: last.reason, candidates: last.candidates };
+        return { status: "not-found" };
+    }
+
+    // What the human confirmation gate shows — id · name · DOB · phone, never
+    // the scraped "Action View Patient" button text.
+    function psaIdentityLine(parsed) {
+        const p = parsed || {};
+        return [p.id || "(ID unknown)", p.name || "(name unknown)", "DOB " + (p.dob || "?"), p.phone || "no phone"].join(" · ");
+    }
+    // ── PSA PATIENT IDENTITY END ─────────────────────────────────────────────
+
+    // ---- DOM side of the lookup (v2.28) ----
+    const PATIENTS_SEARCH_BOX = 'input[placeholder="Search by record ID, name, dob or mobile"]';
+
+    function patientsSearchBox() {
+        return document.querySelector(PATIENTS_SEARCH_BOX);
+    }
+
+    // The Patients list is entered through the app's OWN sidebar link: that runs
+    // the router and mounts the list component with its search wired up. A hard
+    // location.href = "/patients" can land on a rendered-but-dead list whose
+    // search answers nothing (proved live 2026-10-02: no patients-list?search=
+    // request at all, and the 10 unfiltered rows stayed put for both a real query
+    // and "zzzzqqq"). Returns "ready" | "navigating" | "failed".
+    function patientsNavLink() {
+        const links = [...document.querySelectorAll("aside.main-sidebar a.nav-link")];
+        return links.find((a) => a.textContent.trim().toLowerCase() === "patients")
+            || links.find((a) => /^patients?$/i.test(a.textContent.trim()));
+    }
+
+    function psaSay(panel, msg, good, stop) {
+        if (!panel) return;
+        if (panel.status) setStatus(panel.status, msg, good, stop);
+        else renderRunStatus(panel, msg);
+    }
+
+    async function enterPatientsList(panel, why) {
+        if (patientsSearchBox()) return "ready";
+        const link = patientsNavLink();
+        if (!link) {
+            psaSay(panel, `${why} — opening the Patients page...`);
+            location.href = "/patients";
+            return "navigating";
+        }
+        psaSay(panel, `${why} — opening the Patients tab...`);
+        realClick(link);
+        for (let i = 0; i < 60; i++) {
+            if (patientsSearchBox()) {
+                await sleep(800); // let the list component finish mounting
+                trace("enterPatientsList ready after", i, "polls");
+                return "ready";
+            }
+            await sleep(250);
+        }
+        psaSay(panel, `${why} — the Patients search box never appeared. Reload the Patients page and try again.`, false, true);
+        return "failed";
+    }
+
+    function psaSearchRequests() {
+        try { return performance.getEntriesByType("resource").filter((e) => /\/api\/patients-list/i.test(e.name)); }
+        catch (err) { return []; }
+    }
+
+    // The proof that a search RAN: the app's own /api/patients-list request
+    // carrying exactly the query we typed, started after we clicked Search.
+    function psaSearchRequestFired(mark, query) {
+        const want = psaCleanIdentifier(query).toLowerCase();
+        if (!want) return false;
+        return psaSearchRequests().some((e) => {
+            if (e.startTime < mark) return false;
+            let sent = "";
+            try { sent = new URL(e.name, location.origin).searchParams.get("search") || ""; } catch (err) { sent = ""; }
+            return psaCleanIdentifier(sent).toLowerCase() === want;
+        });
+    }
+
+    // Type, click Search, and WAIT FOR THE APP'S OWN REQUEST before reading any
+    // row: a row count is evidence only once the app has answered the question.
+    async function runPatientsSearch(query) {
+        const value = psaCleanIdentifier(query);
+        if (!value) return { ok: false, reason: "empty search query" };
+        const mark = performance.now();
+        const box = patientsSearchBox();
+        if (!box) return { ok: false, reason: "the Patients search box is not on the page" };
+        await typeIntoSearchBox(box, value);
+        const btn = [...document.querySelectorAll("button")].find((b) => b.textContent.trim().toLowerCase() === "search");
+        if (!btn) return { ok: false, reason: "the Patients Search button was not found" };
+        btn.click();
+        for (let i = 0; i < 32; i++) {            // ≤ 8s
+            if (psaSearchRequestFired(mark, value)) {
+                await sleep(1400);                // let the filtered list render
+                return { ok: true, query: value, rows: getSearchRows(false) };
+            }
+            await sleep(250);
+        }
+        return { ok: false, reason: `the app never sent a patients-list search for "${value}"` };
+    }
+
+    // The ONLY lookup the script performs. Every returned row is VERIFIED, and an
+    // unproven search is an error, never a verdict.
+    async function lookupPatientRow(row, onPharmacyB) {
+        const candidates = psaCandidateList(row);
+        if (candidates.length === 0) return { status: "no-identifier" };
+        const results = [];
+        for (const c of candidates) {
+            if (onPharmacyB) onPharmacyB(`searching by ${c.label} ("${c.value}")...`);
+            const res = await runPatientsSearch(c.value);
+            const rows = res.ok ? res.rows.map((el) => {
+                const parsed = psaParseSearchRowText(el.textContent);
+                if (!parsed.id) {
+                    const fallback = extractPatientIdFromRow(el);
+                    if (fallback) parsed.id = fallback;
+                }
+                return { el, parsed, verdict: psaVerifyCandidate({ identifierKey: c.key, identifierValue: c.value, parsed, row }) };
+            }) : [];
+            results.push({ label: c.label, key: c.key, value: c.value, fired: res.ok, reason: res.reason, rows });
+
+            const decision = psaDecideLookup(results);
+            trace("lookup", c.label, c.value, "rows=" + rows.length, decision.status, decision.reason || decision.message || "");
+            if (decision.status === "found") {
+                return { status: "found", foundBy: decision.foundBy, patientId: decision.parsed.id || null, parsed: decision.parsed, element: decision.hit.el };
+            }
+            if (decision.status === "error") return { status: "error", message: decision.message };
+        }
+        const decision = psaDecideLookup(results);
+        if (decision.status === "found") {
+            return { status: "found", foundBy: decision.foundBy, patientId: decision.parsed.id || null, parsed: decision.parsed, element: decision.hit.el };
+        }
+        if (decision.status === "ambiguous") {
+            return { status: "ambiguous", foundBy: decision.foundBy, reason: decision.reason, candidates: decision.candidates || [] };
+        }
+        if (decision.status === "error") return { status: "error", message: decision.message };
+        return { status: "not-found" };
     }
 
     async function stepSearch(job, panel) {
         const row = job.row;
-        const candidates = [
-            { label: "RxFlow Patient ID", value: row.patientId },
-            { label: "Patient Email", value: row.patientEmail },
-            { label: "Phone", value: row.phone },
-            { label: "Patient Name", value: row.patientName }
-        ].filter((c) => c.value);
+        const candidates = psaCandidateList(row);
 
         if (candidates.length === 0) {
-            setStatus(panel.status, "No usable identifier (ID / email / phone / name) in this row.", false, true);
+            setStatus(panel.status, "No usable identifier in this row (Patient ID, phone, or a full first+last name) — open the patient manually. A single name token is never searched.", false, true);
+            apiSet('waiting_human', 'no usable identifier in this row — open the patient manually');
             return;
         }
 
@@ -960,88 +1982,93 @@ window.__scripts['PSA'] = {
         // row, so if we're not on the Patients list page, stop and let the
         // user navigate (the job is left in "search" so the script resumes
         // on the Patients page load).
-        const searchBox = document.querySelector('input[placeholder="Search by record ID, name, dob or mobile"]');
-        if (!searchBox) {
-            // Auto-navigate to the Patients list page. The job is already saved
-            // at step "search", so on the Patients page load the script resumes
-            // the search itself — the user never has to navigate manually.
-            setStatus(panel.status, "Not on the Patients page — navigating there to search...");
-            location.href = "/patients";
+        // Enter the Patients list through the app's own sidebar link (v2.28): a
+        // hard /patients load can land on a list whose search silently does
+        // nothing, and then every row reads as "no profile" (proved live
+        // 2026-10-02). The job is already saved at step "search", so the hard URL
+        // fallback still resumes on the Patients page load.
+        const entered = await enterPatientsList(panel, "Not on the Patients page");
+        if (entered !== "ready") return;
+
+        // v2.28 — ONE lookup, verified at every step. The old loop accepted the
+        // first non-empty row list as proof of identity ("exactly one row =
+        // found"), which on this fuzzy substring search meant a lone surname
+        // ("Sampleperson") auto-opened a stranger's profile ("Lara Sampleperson").
+        const lookup = await lookupPatientRow(row, (m) => setStatus(panel.status, `Searching: ${m}`));
+        trace("stepSearch verdict", lookup.status, lookup.foundBy || "", lookup.reason || lookup.message || "");
+
+        if (lookup.status === "error") {
+            // A search that provably did not run must never be read as "no
+            // patient" — that is how a real row gets dropped from the queue.
+            setStatus(panel.status, `Search stopped: ${lookup.message}. Nothing was changed — reload the Patients page and run again.`, false, true);
+            apiSet('error', lookup.message);
             return;
         }
 
-        for (const candidate of candidates) {
-            setStatus(panel.status, `Searching by ${candidate.label}: "${candidate.value}"...`);
+        if (lookup.status === "no-identifier") {
+            setStatus(panel.status, "No usable identifier in this row — open the patient manually.", false, true);
+            apiSet('waiting_human', 'no usable identifier in this row — open the patient manually');
+            return;
+        }
 
-            await typeIntoSearchBox(searchBox, candidate.value);
-
-            // The Patients search only filters after its "Search" button is
-            // clicked — typing alone leaves the list unfiltered (verified
-            // while debugging: still 187 rows until Search was clicked).
-            const searchBtn = [...document.querySelectorAll("button")].find((b) => b.textContent.trim().toLowerCase() === "search");
-            if (searchBtn) {
-                searchBtn.click();
-                await sleep(400);
-            }
-
-            const matches = await waitForSearchMatches(candidate.value);
-
-            if (matches.length === 0) {
-                continue; // try the next identifier
-            }
-
-            if (matches.length > 1) {
-                setStatus(panel.status, `${matches.length} matches found via ${candidate.label} — pick the right one below.`, false, true);
-                apiSet('waiting_human', `${matches.length} matches — pick one`);
-                matches.forEach((rowEl) => {
-                    const btn = document.createElement("button");
-                    btn.className = "psa-btn";
-                    btn.textContent = rowEl.textContent.trim().slice(0, 90);
-                    btn.addEventListener("click", async () => {
-                        const menuOpened = await openPatientRow(rowEl);
-                        if (menuOpened) {
-                            const nav = await clickAndFollowNav(() => clickVisibleViewPatient());
-                            if (nav) {
-                                job.step = "consent-check";
-                                saveJob(job);
-                                location.href = nav;
-                                return;
-                            }
+        if (lookup.status === "ambiguous") {
+            const cands = lookup.candidates || [];
+            setStatus(panel.status, cands.length
+                ? `${lookup.reason || "more than one possible patient"} — confirm the record below before opening a profile (searched by ${lookup.foundBy}).`
+                : `${lookup.reason || "the search returned nothing usable"} — open the patient manually.`, false, true);
+            apiSet('waiting_human', cands.length ? `${cands.length} record(s) need confirmation` : 'needs a manual lookup');
+            cands.forEach((cand) => {
+                const btn = document.createElement("button");
+                btn.className = "psa-btn";
+                btn.textContent = "Open " + psaIdentityLine(cand.parsed);
+                btn.title = "Confirm this is the right patient — a wrong patient here becomes a wrong sale and a wrong SMS.";
+                btn.addEventListener("click", async () => {
+                    const menuOpenedNow = await openPatientRow(cand.el);
+                    if (menuOpenedNow) {
+                        const nav = await clickAndFollowNav(() => clickVisibleViewPatient());
+                        if (nav) {
+                            job.step = "consent-check";
+                            saveJob(job);
+                            location.href = nav;
+                            return;
                         }
-                        job.step = "consent-check";
-                        saveJob(job);
-                        setStatus(panel.status, "Menu opened — click View Patient for the selected match.");
-                    });
-                    panel.body.appendChild(btn);
-                });
-                return;
-            }
-
-            const menuOpened = await openPatientRow(matches[0]);
-            if (menuOpened) {
-                // View Patient navigates via window.open (popup-blocked for
-                // synthetic clicks), but our hook captures the URL and we
-                // redirect the current tab — fully automated, no manual click.
-                const nav = await clickAndFollowNav(() => clickVisibleViewPatient());
-                if (nav) {
+                    }
                     job.step = "consent-check";
                     saveJob(job);
-                    setStatus(panel.status, `Patient found via ${candidate.label}. Opening profile...`);
-                    location.href = nav;
-                    return;
-                }
-            }
-            job.step = "consent-check";
-            saveJob(job);
-            setStatus(panel.status, menuOpened
-                ? `Patient found via ${candidate.label}. Click View Patient in the open menu to open the profile — the script resumes there.`
-                : `Patient found via ${candidate.label} but the row menu wouldn't open — click its Action > View Patient, then reload.`);
+                    setStatus(panel.status, "Menu opened — click View Patient for the confirmed record.");
+                });
+                panel.body.appendChild(btn);
+            });
             return;
         }
 
-        setStatus(panel.status, `No patient found by ID, email, phone, or name. Stopping — verify manually.`, false, true);
-        clearJob();
-        renderQueueStrip(panel);
+        if (lookup.status === "not-found") {
+            setStatus(panel.status, "No patient record found by Patient ID, phone, or full name. Stopping — verify manually.", false, true);
+            apiSet('waiting_human', 'no patient record found — verify manually before creating the sale');
+            clearJob();
+            renderQueueStrip(panel);
+            return;
+        }
+
+        const menuOpened = await openPatientRow(lookup.element);
+        if (menuOpened) {
+            // View Patient navigates via window.open (popup-blocked for
+            // synthetic clicks), but our hook captures the URL and we
+            // redirect the current tab — fully automated, no manual click.
+            const nav = await clickAndFollowNav(() => clickVisibleViewPatient());
+            if (nav) {
+                job.step = "consent-check";
+                saveJob(job);
+                setStatus(panel.status, `Patient found via ${lookup.foundBy} (${psaIdentityLine(lookup.parsed)}). Opening profile...`);
+                location.href = nav;
+                return;
+            }
+        }
+        job.step = "consent-check";
+        saveJob(job);
+        setStatus(panel.status, menuOpened
+            ? `Patient found via ${lookup.foundBy} (${psaIdentityLine(lookup.parsed)}). Click View Patient in the open menu to open the profile — the script resumes there.`
+            : `Patient found via ${lookup.foundBy} but the row menu wouldn't open — click its Action > View Patient, then reload.`);
     }
 
     // ---- STEP: profile-check pass (v1.27) ----
@@ -1050,9 +2077,10 @@ window.__scripts['PSA'] = {
     // PAT123456789) filled into the row; rows with no profile are removed
     // from the queue after the pass; ambiguous lookups stay in the queue
     // flagged for the human (R13). Only then does the user click Run.
-    // Lookup order per row: email -> phone -> name (the Patients search box
-    // matches all three). Rows that already carry a patient ID from the sheet
-    // are skipped — an ID IS a profile.
+    // Lookup order per row (v2.28): patient ID -> phone -> full name. Email is
+    // NOT searched — the Patients search ignores it (proved live 2026-10-02), so
+    // an email query can only manufacture a false "no profile". Rows that already
+    // carry a patient ID from the sheet are skipped — an ID IS a profile.
 
     function extractPatientIdFromRow(rowEl) {
         // Verified live 2026-08-04: the first .grid-item span in a search
@@ -1065,75 +2093,12 @@ window.__scripts['PSA'] = {
         return m ? m[0].trim() : null;
     }
 
-    // Sanity check that a search-result row is plausibly OUR patient. The
-    // Patients search matches email too, but the result row only displays
-    // ID / first / last / DOB / phone — so an email query can't be confirmed
-    // by its text alone; the row's phone digits or a distinctive name token
-    // can. A single match that fails this check is flagged, never auto-captured.
-    function rowLooksLikePatient(rowEl, row) {
-        const t = rowEl.textContent.toLowerCase();
-        const phone = (row.phone || "").replace(/\D/g, "");
-        if (phone && phone.length >= 7 && t.replace(/\D/g, "").includes(phone)) return true;
-        const nameTokens = (row.patientName || "").toLowerCase().split(/\s+/).filter((s) => s.length > 2);
-        return nameTokens.length > 0 && nameTokens.some((tok) => t.includes(tok));
-    }
-
-    // After the Search button is clicked, wait a fixed beat for the Patients
-    // list to filter, then return the visible rows. A fixed wait beats any
-    // stability heuristic here: the app's filter completes within ~600ms
-    // (verified live 2026-08-04), and count-stability detection raced the
-    // list's transition/render states (v1.27 live bug: "multiple matches"
-    // and "search did not narrow" on every batch search).
-    async function waitForSearchSettle(timeoutMs = 6000) {
-        const start = Date.now();
-        await sleep(1600);
-        return getSearchRows(false); // strict: no hidden-table fallback (v1.27)
-    }
-
-    // One row lookup. Returns:
-    //   { status: "found", foundBy, patientId }
-    //   { status: "not-found" }            (no profile — row will be removed)
-    //   { status: "ambiguous", foundBy }   (2+ matches, or the lone match
-    //                                       doesn't look like the patient)
-    //   { status: "no-identifier" }        (row has no email/phone/name)
-    //   { status: "error", message }       (search infrastructure missing)
-    async function checkPatientExists(row, onPharmacyB) {
-        const candidates = [
-            { label: "email", value: row.patientEmail },
-            { label: "phone", value: row.phone },
-            { label: "name", value: row.patientName }
-        ].filter((c) => c.value);
-
-        if (candidates.length === 0) return { status: "no-identifier" };
-
-        for (const c of candidates) {
-            if (onPharmacyB) onPharmacyB(`searching by ${c.label}...`);
-            trace("candidate", c.label, c.value);
-            // Re-locate the search box fresh on every candidate — the app can
-            // re-render/replace the input (R3), and a cached reference goes
-            // stale, silently typing into a detached element.
-            const searchBox = document.querySelector('input[placeholder="Search by record ID, name, dob or mobile"]');
-            if (!searchBox) { trace("candidate no searchbox"); return { status: "error", message: "Patients search box not found" }; }
-            await typeIntoSearchBox(searchBox, c.value);
-            const searchBtn = [...document.querySelectorAll("button")].find((b) => b.textContent.trim().toLowerCase() === "search");
-            if (searchBtn) { searchBtn.click(); trace("search clicked"); await sleep(400); }
-            const rows = await waitForSearchSettle();
-            trace("candidate result", c.label, "rows=" + rows.length, rows[0] ? "first=" + rows[0].textContent.replace(/\s+/g, " ").trim().slice(0, 60) : "");
-
-            // The settle floor already guarantees the app applied the filter,
-            // so the count IS the app's answer: 0 = no match via this
-            // identifier, 1 = single match (verify it looks like our patient),
-            // 2+ = ambiguous (R13: never auto-pick).
-            if (rows.length === 0) continue; // no profile via this identifier
-            if (rows.length > 1) return { status: "ambiguous", foundBy: c.label };
-            if (!rowLooksLikePatient(rows[0], row)) return { status: "ambiguous", foundBy: c.label };
-            const patientId = extractPatientIdFromRow(rows[0]);
-            if (!patientId) return { status: "ambiguous", foundBy: c.label };
-            return { status: "found", foundBy: c.label, patientId };
-        }
-
-        return { status: "not-found" };
-    }
+    // v2.28: rowLooksLikePatient() / waitForSearchSettle() / checkPatientExists()
+    // lived here. They were replaced by the identity block + lookupPatientRow()
+    // above: the old net passed a row if ANY name token appeared anywhere in its
+    // text (so "Zhang" was "verified" by "yinggggg zhanggggg"), and the old rule
+    // "exactly one row = found" opened a stranger's profile for the surname
+    // "Sampleperson".
 
     // Kicks off the pass. Persists the job so a navigation to /patients (or a
     // reload mid-pass) resumes where it left off.
@@ -1147,12 +2112,13 @@ window.__scripts['PSA'] = {
         }));
         const job = { step: "profile-check", pass: { index: 0, results } };
         saveJob(job);
-        if (location.pathname !== "/patients") {
-            renderRunStatus(panel, "Navigating to the Patients page to check which rows have profiles...");
-            location.href = "/patients";
-            return;
-        }
-        runProfileCheckPass(panel);
+        if (patientsSearchBox()) { runProfileCheckPass(panel); return; }
+        renderRunStatus(panel, "Opening the Patients tab to check which rows have profiles...");
+        enterPatientsList(panel, "Checking which rows have profiles").then((entered) => {
+            // "navigating" = the hard /patients fallback; the saved job resumes the
+            // pass on that page load. "failed" already reported itself.
+            if (entered === "ready") runProfileCheckPass(panel);
+        });
     }
 
     // Runs (or resumes) the pass on the Patients page. Searches each row
@@ -1176,16 +2142,11 @@ window.__scripts['PSA'] = {
         }
         if (queue.length === 0) { clearJob(); renderInputStage(panel); return; }
 
-        if (location.pathname !== "/patients") {
-            renderRunStatus(panel, "Navigating to the Patients page to continue the profile check...");
-            location.href = "/patients";
-            return;
-        }
-        const searchBox = document.querySelector('input[placeholder="Search by record ID, name, dob or mobile"]');
-        if (!searchBox) {
-            renderRunStatus(panel, "Patients search box not found — reload the Patients page and the check resumes.");
-            return;
-        }
+        // The sidebar Patients tab is the reliable way in (v2.28): it mounts the
+        // list with its search wired up, where a hard /patients load can leave a
+        // rendered-but-dead search box that answers nothing.
+        const entered = await enterPatientsList(panel, "Checking which rows have profiles");
+        if (entered !== "ready") return; // navigating (the job resumes) or failed (reported)
 
         if (!isCurrent()) return;
         panel.body.innerHTML = "";
@@ -1220,24 +2181,30 @@ window.__scripts['PSA'] = {
             // (v1.27 live: the pass twice died silently mid-search, with the
             // page healthy and no capturable exception).
             const found = await Promise.race([
-                checkPatientExists(row, (m) =>
+                lookupPatientRow(row, (m) =>
                     setStatus(status, `Row ${i + 1}/${results.length} (${res.name}): ${m}`))
                     .catch((err) => ({ status: "error", message: err && err.message ? err.message : String(err) })),
-                new Promise((resolve) => setTimeout(() => resolve({ status: "error", message: "row check timed out" }), 25000))
+                new Promise((resolve) => setTimeout(() => resolve({ status: "error", message: "row check timed out" }), 40000))
             ]);
             trace("row done", i + 1, res.name, found.status, found.patientId || "");
 
             if (!isCurrent()) return; // Reset / another row started — abandon (R5)
+            // Never persist DOM nodes: the candidates carried for the human gate
+            // are reduced to the parsed identity + verdict.
+            delete found.element;
+            if (found.candidates) found.candidates = found.candidates.map((c) => ({ parsed: c.parsed, verdict: c.verdict }));
             Object.assign(res, found);
             job.pass.index = i + 1;
             saveJob(job);
 
             if (found.status === "found") {
-                setStatus(status, `Row ${i + 1}/${results.length}: ✅ ${res.name} — ${found.patientId} (via ${found.foundBy})`, true);
+                setStatus(status, `Row ${i + 1}/${results.length}: ✅ ${res.name} — ${found.patientId} (via ${found.foundBy}${found.parsed ? " · " + psaIdentityLine(found.parsed) : ""})`, true);
             } else if (found.status === "not-found") {
-                setStatus(status, `Row ${i + 1}/${results.length}: 🚫 ${res.name} — no profile (will be removed)`, false, true);
+                setStatus(status, `Row ${i + 1}/${results.length}: 🚫 ${res.name} — no profile (searched by ID / phone / full name; the row will be removed)`, false, true);
             } else if (found.status === "ambiguous") {
-                setStatus(status, `Row ${i + 1}/${results.length}: ⚠ ${res.name} — ${found.foundBy === "none" ? "search did not narrow — review manually" : "multiple matches — review manually"}`);
+                setStatus(status, `Row ${i + 1}/${results.length}: ⚠ ${res.name} — kept for review: ${found.reason || "the search did not confirm this patient"}`);
+            } else if (found.status === "error") {
+                setStatus(status, `Row ${i + 1}/${results.length}: ⛔ ${res.name} — kept: ${found.message || "the search did not run"}`);
             }
             await sleep(200);
         }
@@ -1254,16 +2221,18 @@ window.__scripts['PSA'] = {
     // Applies the pass results to the persisted queue: fills patient IDs on
     // found rows, removes the no-profile rows, keeps ambiguous/no-identifier
     // rows flagged for the human. NOTE (v2.12): the pass does NOT touch
-    // r.existingPatient anymore — the sheet's "Existing RxFlow Patient"
-    // column is the single source of truth for the skip-questionnaire
-    // decision (non-empty = prefill + human submit; blank = auto-skip).
-    // v1.27 used to flag found rows existingPatient="TRUE", which made
-    // blank-column rows stop auto-skipping (Jeyson 2026-08-18).
+    // r.existingPatient. v1.27 used to flag found rows existingPatient="TRUE",
+    // which had wrongly switched rows out of the (then) auto-skip path
+    // (Jeyson 2026-08-18).
+    // v2.20: nothing branches on existingPatient any more — the questionnaire
+    // is always autofilled when it renders — so the pass stays hands-off for
+    // the same reason but with no downstream consequence either way.
     function applyProfileCheckResults(panel, results) {
         clearJob();
         const queue = loadQueue() || [];
         const kept = [];
         const removed = [];
+        const removedUnmatched = [];
         for (const r of queue) {
             const res = results.find((x) => x._id === r._id);
             const status = res ? res.status : "has-id";
@@ -1275,10 +2244,15 @@ window.__scripts['PSA'] = {
                 delete r._checkNote;
                 kept.push(r);
             } else if (status === "ambiguous") {
-                r._checkNote = "multiple matches — review manually";
-                kept.push(r);
+                // Jeyson 2026-10-02: "if there is no proper match, still remove
+                // the row." A search that came back with rows that are NOT this
+                // patient is a failed lookup — same as no result at all. (Rows
+                // still kept below are not match verdicts: the check never ran.)
+                delete r._checkNote;
+                removed.push(r);
+                removedUnmatched.push(r);
             } else if (status === "no-identifier") {
-                r._checkNote = "no email/phone/name — couldn't check";
+                r._checkNote = "no Patient ID / phone / full name — couldn't check";
                 kept.push(r);
             } else if (status === "error") {
                 r._checkNote = (res && res.message) || "check error — review manually";
@@ -1294,8 +2268,8 @@ window.__scripts['PSA'] = {
             kept: kept.length,
             found: kept.filter((r) => r.patientId).length,
             removed,
-            ambiguous: kept.filter((r) => r._checkNote === "multiple matches — review manually"),
-            noId: kept.filter((r) => r._checkNote === "no email/phone/name — couldn't check")
+            removedUnmatched,
+            noId: kept.filter((r) => (r._checkNote || "").startsWith("no Patient ID"))
         };
         renderQueueStage(panel, kept, summary, false);
     }
@@ -1361,6 +2335,43 @@ window.__scripts['PSA'] = {
     // in <div class="show_common_pat"><span class="title_color">Height  :</span>
     // <span>5'8\" (68)</span></div> pairs (weight "225 lbs"), gender lives in a
     // .show_pat_content pair ("Gender at Birth : Female").
+    // v2.20: ALSO harvests the state from the header's "State :" row (verified
+    // live: <div class="col-md-12 show_pat_content pl-0"><span
+    // class="title_color">State :</span><span>North Carolina</span></div>) —
+    // the pharmacy-routing advisory needs it. The full name is mapped through
+    // STATE_ABBR; a bare 2-letter value is taken as-is.
+    // v2.23: THE STATE THAT MATTERS IS THE ONE THE ORDER SHIPS TO.
+    // The header "State :" row is the patient's CONTACT/billing state, and the
+    // two disagree all the time — a patient whose contact state is restricted
+    // may ship to a family member in a free state (not gated), and one whose
+    // contact state is free may ship into a restricted state (gated). The
+    // shipping address ships, so only its State row decides the advisory.
+    //
+    // The rows are read with their SECTION title, because Contact Details and
+    // Shipping Address both carry an "Address line 1 / City / State / …" block
+    // (live-caught 2026-09-29: an untagged read returned the contact state while
+    // the shipping state was different).
+    function shippingAddressStateFromProfile() {
+        const pane = document.getElementById("patient_details");
+        if (!pane) return { abbr: "", raw: "", source: "" };
+        let section = "";
+        for (const el of pane.querySelectorAll("h3, div.row.pt-3")) {
+            if (el.tagName === "H3") { section = (el.textContent || "").replace(/\s+/g, " ").trim(); continue; }
+            if (!/^shipping\s*address/i.test(section)) continue;
+            const cols = el.querySelectorAll(":scope > div.col-md-6");
+            if (cols.length < 2) continue;
+            const label = (cols[0].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+            if (label !== "state") continue;
+            const strong = cols[1].querySelector("strong");
+            const raw = ((strong ? strong.textContent : cols[1].textContent) || "").replace(/\s+/g, " ").trim();
+            const clean = /^-$/.test(raw) ? "" : raw;
+            if (!clean) break; // rendered placeholder — treat as not readable yet
+            const abbr = normalizeStateAbbr(clean);
+            return { abbr, raw: clean, source: abbr ? "shipping-address" : "" };
+        }
+        return { abbr: "", raw: "", source: "" };
+    }
+
     function harvestProfileMeasurements() {
         const out = {};
         const divs = document.querySelectorAll(".show_common_pat, .show_pat_content");
@@ -1380,8 +2391,20 @@ window.__scripts['PSA'] = {
                 if (w) out.weightLbs = parseInt(w[1], 10);
             } else if (t.indexOf("gender") === 0 && !out.gender) {
                 out.gender = /female/i.test(v) ? "female" : (/male/i.test(v) ? "male" : v);
+            } else if (t.indexOf("state") === 0 && !out.state) {
+                // "State :" — full name preferred, plain abbreviation accepted.
+                // Never guess: an unrecognized value stays empty and the
+                // routing advisory says so instead of inventing a route.
+                const clean = v.replace(/\s+/g, " ").trim();
+                if (/^[A-Za-z]{2}$/.test(clean)) out.state = clean.toUpperCase();
+                else if (STATE_ABBR[clean.toLowerCase()]) out.state = STATE_ABBR[clean.toLowerCase()];
             }
         }
+        // v2.23: the shipping address's own State row — the ONLY state the
+        // routing advisory is allowed to act on.
+        const ship = shippingAddressStateFromProfile();
+        if (ship.abbr) out.shippingState = ship.abbr;
+        if (ship.raw) out.shippingStateRaw = ship.raw;
         return out;
     }
 
@@ -1393,14 +2416,19 @@ window.__scripts['PSA'] = {
     // harvest a placeholder: poll until a real height (starts with a digit)
     // appears, and prefer a snapshot that also has weight. Returns the most
     // complete snapshot found, or null if nothing real ever appears.
+    // v2.20: the state row is part of the same header render, so a snapshot
+    // that has a real height but no state yet is kept polling — the routing
+    // advisory must not report "state unknown" just because it read early.
+    // v2.23: "no state" now means no SHIPPING state; the header state does not
+    // satisfy the wait (it is the wrong address).
     async function waitForProfileMeasurements(timeoutMs = 12000) {
         const start = Date.now();
         let best = null;
         while (Date.now() - start < timeoutMs) {
             const m = harvestProfileMeasurements();
             const hasRealHeight = m.heightLabel && /^\d/.test(m.heightLabel);
-            if (hasRealHeight && m.weightLbs) return m;      // fully real
-            if (hasRealHeight) best = m;                      // at least a real height
+            if (hasRealHeight && m.weightLbs && m.shippingState) return m;  // fully real
+            if (hasRealHeight) best = m;                                     // at least a real height
             await sleep(300);
         }
         return best;
@@ -1513,15 +2541,45 @@ window.__scripts['PSA'] = {
         // blank) while its data loads async, then the real values — so WAIT
         // for real data before harvesting (v1.20). Run the consent settle
         // concurrently with the harvest — both wait on the page's async data.
-        const [settledStatus, measurements] = await Promise.all([
+        // v2.20: the previous-questionnaire check runs concurrently too (a
+        // read-only GET). It changes NO behaviour — the sale form's
+        // questionnaire is autofilled either way (Jeyson 2026-09-24) — it only
+        // reports the history on this panel.
+        const [settledStatus, measurements, qHistory] = await Promise.all([
             waitForConsentSettle(),
-            waitForProfileMeasurements().then((m) => m || harvestProfileMeasurements())
+            waitForProfileMeasurements().then((m) => m || harvestProfileMeasurements()),
+            fetchQuestionnaireHistory(patientIdFromUrl())
         ]);
+        const qTemplates = qHistory.ok && qHistory.total ? await fetchQuestionnaireTemplates() : {};
         if (measurements.heightLabel) job.heightLabel = measurements.heightLabel;
         if (measurements.heightIn) job.heightIn = measurements.heightIn;
         if (measurements.weightLbs) job.weightLbs = measurements.weightLbs;
         if (measurements.gender) job.gender = measurements.gender;
-        if (measurements.heightLabel || measurements.weightLbs || measurements.gender) saveJob(job);
+        // v2.20: the sheet's Patient State column was removed from the live
+        // sheet, so the profile is the source for the routing advisory. The
+        // sheet value is only a FALLBACK when the profile gave nothing, and it
+        // is normalized first — the sheet writes FULL names ("North Carolina")
+        // in some builds and abbreviations in others, and the router only
+        // accepts a 2-letter code (a full name there would read as "no state"
+        // and silently skip the check).
+        const sheetState = normalizeStateAbbr(job.row && job.row.patientState);
+        // v2.23: the SHIPPING address decides. The header state and the sheet's
+        // Patient State are the patient's own state — they are kept as a HINT for
+        // the "could not read it" warning, never as a verdict (a patient gated in
+        // their own state who ships somewhere free is not gated, and vice versa).
+        const shipState = measurements.shippingState || "";
+        job.state = shipState;
+        job.stateSource = shipState ? "shipping-address" : "";
+        job.stateHint = shipState ? "" : (measurements.state || sheetState || "");
+        job.questionnaireHistory = {
+            checked: qHistory.ok,
+            reason: qHistory.ok ? "" : qHistory.reason,
+            total: qHistory.ok ? qHistory.total : null,
+            templates: qTemplates,
+            records: qHistory.ok ? qHistory.records : []
+        };
+        saveJob(job);
+        api.questionnaireHistory = job.questionnaireHistory;
 
         const status = settledStatus || detectConsentStatus();
         const allGood = Object.values(status).every((s) => s === "checked");
@@ -1547,9 +2605,21 @@ window.__scripts['PSA'] = {
             panel.body.appendChild(noteLine);
         }
 
+        // v2.20: report whether the patient already has a questionnaire on file
+        // (informational — the sale form's questionnaire is autofilled either
+        // way), then the pharmacy-routing advisory.
+        renderQuestionnaireHistory(job.questionnaireHistory || { ok: false, reason: "not checked" }, (job.questionnaireHistory && job.questionnaireHistory.templates) || {}, panel);
+        renderRoutingAdvisory(job, panel);
+
         const confirmBtn = document.createElement("button");
         confirmBtn.className = "psa-btn psa-btn-primary";
-        confirmBtn.textContent = allGood ? "Confirmed — proceed to Create Sale" : "Override — proceed anyway";
+        // v2.22: a gated route PAUSES the row. The advisory above is a warning,
+        // and a warning the flow outruns in one second is not a pause — so the
+        // auto-proceed is skipped and this button becomes the operator's resume.
+        const routingGated = routingNeedsAttention(job.routing);
+        confirmBtn.textContent = routingGated
+            ? "Proceed anyway — routing gated"
+            : allGood ? "Confirmed — proceed to Create Sale" : "Override — proceed anyway";
 
         const stopBtn = document.createElement("button");
         stopBtn.className = "psa-btn";
@@ -1569,11 +2639,16 @@ window.__scripts['PSA'] = {
         // for a manual click. Brief delay so the panel is visible (and the
         // user can still hit Stop / Reset) before navigation starts; the
         // epoch guard abandons the timer if the panel was reset meanwhile.
-        if (allGood) {
+        // v2.22: NEVER when the routing report needs attention (partial / clinic
+        // / blocked) — that case waits for a human, which is the whole point of
+        // the advisory. Nothing else about the flow changes.
+        if (allGood && !routingGated) {
             setStatus(panel.status, "All verified — auto-proceeding to Create Sale...");
             setTimeout(() => {
                 if (isCurrent()) proceedToCreateSale(job, panel);
             }, 1000);
+        } else if (routingGated) {
+            setStatus(panel.status, "⚠ Gated — the pharmacy route needs your check (see above). Fix the shipping address, then click to proceed anyway.", true);
         }
 
         stopBtn.addEventListener("click", () => {
@@ -1627,7 +2702,7 @@ window.__scripts['PSA'] = {
     }
 
     // ---- STEP: modules / cart / questionnaire / ship date (sale detail page) ----
-    async function goToProduct(medType, category, product, qty, requestedQty, capped, panel) {
+    async function goToProduct(medType, category, product, tab, qty, requestedQty, capped, panel) {
         setStatus(panel.status, capped
             ? `Adding ${qty}x ${product} (sheet said ${requestedQty} — capped at ${MAX_PEPTIDE_QTY}).`
             : `Adding ${qty}x ${product}...`);
@@ -1641,7 +2716,9 @@ window.__scripts['PSA'] = {
         const catEl = await waitForByText(".med-item", category);
         catEl.click();
 
-        const tabEl = await waitForByText(".col.text-center.cursor-class > div", "eRx");
+        // v2.32: the tab comes from the swept catalog — products also live under
+        // OTC and Subscription, and the old hardcoded "eRx" click missed them.
+        const tabEl = await waitForByText(".col.text-center.cursor-class > div", tab || "eRx");
         tabEl.click();
 
         const prodEl = await waitForByText(".filtered-items .cursor-class.text-break.font-weight-bold", product);
@@ -1680,61 +2757,65 @@ window.__scripts['PSA'] = {
         }
     }
 
+    // Is the sale-form questionnaire actually on the page?
+    // v2.20: this is the GROUND TRUTH for the whole questionnaire step, so it
+    // checks the form element itself (id "questionnare-form", the app's typo —
+    // confirmed in-session and again live 2026-08-06). It deliberately does NOT
+    // match a bare "Submit"/"Skip Questionnaire" button: those exist only as
+    // children of this form, so matching them adds nothing except a way to be
+    // wrong (any other form on the page with a Submit button would read as "a
+    // questionnaire is here", and the old skip path keyed off the Skip button,
+    // which is exactly the artifact that made "never skip" impossible to trust).
     function questionnaireIsPresent() {
-        // Confirmed in-session: the questionnaire form has id
-        // "questionnare-form" and renders "Submit" / "Skip Questionnaire"
-        // buttons.
-        return !!document.getElementById("questionnare-form")
-            || !!findByText("button", "Skip Questionnaire", false)
-            || !!findByText("button", "Submit", true);
+        return !!document.getElementById("questionnare-form");
     }
 
-    async function resolveQuestionnaires(skip) {
-        // For NEW patients (skip=true): the questionnaire only appears AFTER a
-        // peptide has been added and renders asynchronously (this site loads
-        // everything async), so it can be absent when this runs. Wait for the
-        // "Skip Questionnaire" button to show up (it always will after a
-        // peptide is added), click it, and keep clicking any follow-up
-        // questionnaires until none have appeared for a sustained period.
-        if (skip) {
-            const start = Date.now();
-            let clicked = false;   // has the questionnaire ever appeared+been skipped?
-            let skipped = 0;
-            let lastSeen = 0;
-            while (Date.now() - start < 45000) {
-                const skipBtn = findByText("button", "Skip Questionnaire", false);
-                if (skipBtn) {
-                    skipBtn.click();
-                    clicked = true;
-                    skipped++;
-                    lastSeen = Date.now();
-                    await sleep(400);
-                    continue;
-                }
-                // No skip button right now. Only declare done after we have
-                // actually skipped one AND nothing has reappeared for a while.
-                if (clicked && Date.now() - lastSeen > 2500 && !questionnaireIsPresent()) {
-                    console.log(`[PSA] resolveQuestionnaires(skip) done — skipped ${skipped} questionnaire(s)`);
-                    return { status: "ok", skipped };
-                }
-                await sleep(400);
-            }
-            // v2.0: report whether anything was actually skipped — a 0 here
-            // means the questionnaire never appeared (or the button changed),
-            // which is a real signal, not a silent pass.
-            console.log(`[PSA] resolveQuestionnaires(skip) timeout — skipped ${skipped} questionnaire(s)`);
-            return { status: "ok", skipped };
+    // Wait for the questionnaire to render, then report whether it did.
+    // The form is fetched per-sale by the cart's drug ids and renders
+    // asynchronously AFTER the products are added, so it can legitimately be
+    // absent at this instant. Absent-after-waiting is a REAL answer ("this cart
+    // has no questionnaire"), not a failure — the caller continues either way.
+    // 25s (not 15) because live probing 2026-09-24 showed the questionnaire is a
+    // Vue component rendered INSIDE A MODAL on the sale form, fetched after the
+    // cart is set — a second async hop after the products land. Waiting longer
+    // costs nothing next to a sale the pharmacist reviews anyway, and declaring
+    // "no questionnaire" too early would step past one that was merely slow.
+    async function waitForQuestionnaireForm(timeoutMs = 25000) {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            if (questionnaireIsPresent()) return { present: true, waitedMs: Date.now() - start };
+            await sleep(300);
         }
+        return { present: questionnaireIsPresent(), waitedMs: Date.now() - start };
+    }
 
-        // Existing patients: never auto-skip — hand back for manual review.
-        const start2 = Date.now();
-        while (Date.now() - start2 < 20000) {
-            if (questionnaireIsPresent() || findByText("button", "Submit", true)) {
-                return { status: "needs-manual-questionnaire", skipped: 0 };
-            }
-            await sleep(400);
+    // The questionnaire step's ONE entry point (v2.20).
+    //
+    // Jeyson's rule (2026-09-24): NEVER skip the questionnaire — autofill it
+    // whether the sale is being driven automatically or the products were added
+    // by hand. The script never clicks "Skip Questionnaire" under any
+    // condition. The old behaviour branched on the sheet's "Existing
+    // RxFlow Patient" column and, for a blank, polled up to 45s for the
+    // Skip button and clicked it — which (a) burned 45s when no form was
+    // coming, and (b) DISCARDED a real questionnaire whenever one was there
+    // (one Skip click removes the form), silently, with the sheet column as the
+    // only justification. The form is not conditional on patient history at
+    // all: it is fetched from the cart's drug ids, so "is it there?" is
+    // observable and the column was never the right signal.
+    async function handleQuestionnaireStep(job, panel) {
+        setStatus(panel.status, "Checking for a questionnaire...");
+        const found = await waitForQuestionnaireForm();
+        if (!found.present) {
+            console.info(`[PSA] no questionnaire rendered after ${Math.round(found.waitedMs / 1000)}s — nothing to fill, continuing`);
+            // Advance the persisted step BEFORE finishing, like the pre-v2.20
+            // skip path did — otherwise a reload at the Continue gate re-runs
+            // stepSelectModules and re-adds the whole cart.
+            job.step = "ship-date";
+            saveJob(job);
+            await finishModulesStep(job, panel);
+            return;
         }
-        return { status: "ok", skipped: 0 };
+        await prefillSaleQuestionnaire(job, panel);
     }
 
     /* ---- Questionnaire prefill (existing patients; NEVER auto-submits) ---- */
@@ -1952,24 +3033,27 @@ window.__scripts['PSA'] = {
         return { filled, missing, heightFilled, weightFilled };
     }
 
-    // Existing patients: prefill the questionnaire with the harvested
-    // height/weight plus safe defaults, then (v1.17) AUTO-SUBMIT it and move
-    // straight on to the ship date — the user reviews everything at the very
-    // end, right before Continue. The only pause is when the questionnaire
-    // genuinely can't be completed automatically (height/weight not on file,
-    // or the form's own validation blocks a blank required question).
-    async function handleExistingPatientQuestionnaire(job, panel) {
-        setStatus(panel.status, "Waiting for questionnaire...");
-        let qf = null;
-        for (let i = 0; i < 30 && !qf; i++) {
-            qf = document.getElementById("questionnare-form");
-            if (!qf) await sleep(300);
-        }
+    // Prefill the sale-form questionnaire from the harvested profile data plus
+    // the safe-default answer bank, set the ship date, then hand off to a human.
+    //
+    // v2.20: this is the ONLY questionnaire path — new patients, existing
+    // patients, and manual product entry all land here. The script fills what it
+    // can, glows the required questions it cannot answer, and NEVER submits and
+    // NEVER skips: the pharmacist reviews and clicks Submit, then presses the
+    // button to continue to the final "Click Continue" gate.
+    //
+    // `manual` (no active job) changes only the RESUME behaviour: with a job we
+    // set `job.step = "ship-date"` so the flow continues to the Continue gate;
+    // without one there is no flow to resume, so resuming just re-runs this scan
+    // (the human may have edited the form or the cart in the meantime).
+    async function prefillSaleQuestionnaire(job, panel, manual) {
+        setStatus(panel.status, "Filling the questionnaire...");
+        const qf = document.getElementById("questionnare-form");
         if (!qf) {
-            // No questionnaire rendered — nothing to fill, just continue.
-            job.step = "ship-date";
-            saveJob(job);
-            await finishModulesStep(job, panel);
+            // The caller waited for the form, so this is a genuine race (it was
+            // torn down, or the cart changed). Never guess: report and continue.
+            console.warn("[PSA] questionnaire form vanished before prefill");
+            if (job && !manual) await finishModulesStep(job, panel);
             return;
         }
 
@@ -1984,52 +3068,69 @@ window.__scripts['PSA'] = {
             await sleep(300);
         }
 
-        const result = prefillQuestionnaire(job);
+        const result = prefillQuestionnaire(job || {});
 
         // Set the ship date NOW, right after the questionnaire is filled. It is
         // independent of the questionnaire submit (verified live: the transmit
         // section renders before the questionnaire is submitted), so the ship
         // date is set in every case — including when height/weight are missing.
-        if (job.row.shipDate) {
-            const ok = await setTransmitLaterDate(job.row.shipDate, panel);
-            if (!ok) return; // status already set by setTransmitLaterDate
+        // Manual mode has no sheet row, so there is no ship date to set.
+        // v2.20: routed through applyShipDateIfAny so a non-date value (a "hold"
+        // instruction) can never abort the row before the questionnaire.
+        if (job && job.row && job.row.shipDate) {
+            const res = await applyShipDateIfAny(job.row.shipDate, panel);
+            if (res.status === "error") return; // status already set
         }
 
-        // The questionnaire cannot be completed without height & weight. If
-        // the profile didn't provide them, stop and let the pharmacist enter
-        // them — the script can't invent the data.
+        // The questionnaire cannot be completed without height & weight. If the
+        // profile didn't provide them, stop and let the pharmacist enter them —
+        // the script can't invent the data.
         if (!result.heightFilled || !result.weightFilled) {
             renderQuestionnaireHandoff(job, panel,
-                "Height/weight are not on file for this patient — enter them in the questionnaire, complete any required answers, click Submit, then press the button below. Ship date is already set.");
+                "Height/weight are not on file for this patient — enter them in the questionnaire, complete any required answers, click Submit, then press the button below."
+                + (job && job.row && job.row.shipDate ? " Ship date is already set." : ""),
+                manual);
             return;
         }
 
-        // Minimal handoff — NEVER auto-submits. The user reviews the filled
-        // questionnaire and clicks Submit themselves, then presses Resume to
-        // finish (which lands on the final "Click Continue" gate).
-        // v2.0: any required question that could not be auto-answered is
-        // listed BY NAME in the message (and glows red in the form) — no more
-        // silent misses.
+        // Any required question that could not be auto-answered is listed BY
+        // NAME in the message (and glows red in the form) — no silent misses.
         const extraMissed = result.missing.filter((m) => !/height|weight/i.test(m));
+        const shipNote = (job && job.row && job.row.shipDate) ? " Ship date is already set." : "";
         let handoffMsg;
         if (extraMissed.length > 0) {
-            handoffMsg = `Questionnaire filled, but ${extraMissed.length} required question(s) are unanswered (glowing red in the form): ${extraMissed.join("; ")}. Answer them, click Submit, then press the button below. Ship date is already set.`;
+            handoffMsg = `Questionnaire filled, but ${extraMissed.length} required question(s) are unanswered (glowing red in the form): ${extraMissed.join("; ")}. Answer them, click Submit, then press the button below.${shipNote}`;
         } else {
-            handoffMsg = "Questionnaire filled and ship date set. Review the answers, click Submit in the form, then press the button below.";
+            handoffMsg = `Questionnaire filled. Review the answers, click Submit in the form, then press the button below.${shipNote}`;
         }
-        renderQuestionnaireHandoff(job, panel, handoffMsg);
+        renderQuestionnaireHandoff(job, panel, handoffMsg, manual);
     }
 
-    // Handoff for existing patients: the script fills the questionnaire
-    // (height/weight + safe defaults) and sets the ship date, but NEVER submits
-    // the questionnaire — the pharmacist reviews and clicks Submit, then presses
-    // Resume to continue to the final "Click Continue" gate.
-    function renderQuestionnaireHandoff(job, panel, message) {
+    // Handoff after prefill: the script fills the questionnaire (height/weight +
+    // safe defaults) and sets the ship date, but NEVER submits and NEVER skips —
+    // the pharmacist reviews and clicks Submit, then presses the button to land
+    // on the final "Click Continue" gate.
+    // Re-attach the manual-ordering note block after a panel wipe so its
+    // live-update closure stays in the document. In manual mode there is no job
+    // flow to run, but the note is still the script's only feedback surface.
+    function restoreManualNote(panel) {
+        const note = document.getElementById("psa-manual-note");
+        if (note) panel.body.appendChild(note);
+    }
+
+    function renderQuestionnaireHandoff(job, panel, message, manual) {
         panel.body.innerHTML = "";
+        restoreManualNote(panel);
         const resumeBtn = document.createElement("button");
         resumeBtn.className = "psa-btn psa-btn-primary";
-        resumeBtn.textContent = "Questionnaire submitted — continue";
+        resumeBtn.textContent = manual ? "Re-scan / refresh the prefilled answers" : "Questionnaire submitted — continue";
         resumeBtn.addEventListener("click", () => {
+            if (manual) {
+                // No job flow to resume — re-run the scan so a re-rendered form
+                // (or a cart change) gets filled again.
+                prefillSaleQuestionnaire(null, panel, true);
+                return;
+            }
             job.step = "ship-date";
             saveJob(job);
             finishModulesStep(job, panel);
@@ -2046,18 +3147,66 @@ window.__scripts['PSA'] = {
     function parseDateParts(shipDateStr) {
         // Accepts M/D/YY or M/D/YYYY (the sheet uses "7/26/26" for 2026-07-26).
         // 2-digit years map to the 2000s.
-        const m = shipDateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+        const m = String(shipDateStr || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
         if (!m) return null;
         let year = parseInt(m[3], 10);
         if (year < 100) year += 2000;
         return { month: parseInt(m[1], 10), day: parseInt(m[2], 10), year };
     }
 
+    // v2.20: the sheet's Desired Shipping Date column is not always a date.
+    // Live case (patient 351792, 2026-09-24) it held the instruction
+    // "hold-do not ship yet", and the old code treated the parse failure as a
+    // fatal error — which aborted the row BEFORE the questionnaire step, so the
+    // panel just showed a date-parse complaint and nothing else ran. A
+    // non-date value is an INSTRUCTION for the pharmacist ("hold", "do not ship
+    // yet", "TBD", "call patient"), not a malformed date: the script must not
+    // invent a date, but it must still fill the questionnaire, leave the
+    // transmit choice alone, and reach the Continue gate.
+    // Returns the trimmed instruction text, or "" when the value is blank or
+    // actually parses as a date.
+    function shipDateIsInstruction(shipDateStr) {
+        const v = String(shipDateStr || "").trim();
+        if (!v) return "";
+        return parseDateParts(v) ? "" : v;
+    }
+
     const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    // The ONE place the ship-date column is interpreted (v2.20). Every call site
+    // must go through this so a non-date value can never abort a row again.
+    // Returns:
+    //   { status: "skipped",  instruction }  — blank, or a non-date instruction
+    //                                          ("hold-do not ship yet"): the
+    //                                          date is LEFT ALONE and the flow
+    //                                          continues to the questionnaire
+    //                                          and the Continue gate.
+    //   { status: "set" }                    — the transmit date was applied.
+    //   { status: "error", message }         — a date was given but the form
+    //                                          could not be driven; the row stops.
+    async function applyShipDateIfAny(shipDateStr, panel) {
+        const raw = String(shipDateStr || "").trim();
+        const instruction = shipDateIsInstruction(raw);
+        if (!raw) return { status: "skipped", instruction: "" };
+        if (instruction) {
+            // Never invent a date. Say so, and keep going.
+            const msg = `Ship date is "${instruction}" (not a date) — left the transmit date alone for you; continuing.`;
+            setStatus(panel.status, msg, false);
+            panel.status.style.color = "var(--ds-warn, #a16207)"; // amber = needs human
+            apiSet("waiting_human", msg);
+            trace("shipDate instruction, skipped", instruction);
+            console.info(`[PSA] ship date "${instruction}" is not a date — transmit date left for the pharmacist`);
+            return { status: "skipped", instruction };
+        }
+        const ok = await setTransmitLaterDate(raw, panel);
+        return ok ? { status: "set" } : { status: "error", message: "ship date could not be set" };
+    }
 
     async function setTransmitLaterDate(shipDateStr, panel) {
         const target = parseDateParts(shipDateStr);
-        if (!target) { setStatus(panel.status, `Could not parse ship date "${shipDateStr}" (expected M/D/YYYY).`, false, true); return false; }
+        // Defensive: callers should route through applyShipDateIfAny, but never
+        // hard-fail here either — a non-date is not an error state.
+        if (!target) { setStatus(panel.status, `Ship date "${shipDateStr}" is not a date — leaving it for you.`, false); return false; }
 
         // The transmit section can render a beat after the questionnaire
         // submits — wait for it instead of failing on a one-shot lookup.
@@ -2121,7 +3270,7 @@ window.__scripts['PSA'] = {
     }
 
     async function stepSelectModules(job, panel) {
-        const { items, unmapped, autoMatched } = parsePurchase(job.row.purchase);
+        const { items, unmapped, autoMatched, ambiguous } = parsePurchase(job.row.purchase);
 
         // v2.19 (Jeyson rule): a purchase item with no matching alias must NOT
         // abort the row. Add everything that DID resolve, then hand the
@@ -2139,7 +3288,7 @@ window.__scripts['PSA'] = {
         if (!job.productsAdded) {
             try {
                 for (const item of items) {
-                    await goToProduct(item.medType, item.category, item.product, item.qty, item.requestedQty, item.capped, panel);
+                    await goToProduct(item.medType, item.category, item.product, item.tab, item.qty, item.requestedQty, item.capped, panel);
                 }
             } catch (err) {
                 setStatus(panel.status, `Failed: ${err.message}`, false, true);
@@ -2147,6 +3296,11 @@ window.__scripts['PSA'] = {
             }
             job.productsAdded = true;
             saveJob(job);
+        }
+
+        if (ambiguous && ambiguous.length > 0) {
+            renderAmbiguousChooser(job, panel, ambiguous, autoMatched);
+            return;
         }
 
         if (unmapped.length > 0) {
@@ -2160,32 +3314,84 @@ window.__scripts['PSA'] = {
     // The questionnaire + ship-date half of the modules step. Split out in
     // v2.19 so the manual-product hand-off can resume straight into it without
     // re-adding the products that are already in the cart.
+    //
+    // v2.20 (Jeyson rule): ONE path for everyone. The old branch on the sheet's
+    // "Existing RxFlow Patient" column is gone — blank meant "auto-skip",
+    // which both wasted 45s waiting on a Skip button that may never come and
+    // threw away real questionnaires. The script now always checks whether a
+    // questionnaire rendered and always autofills it when it did.
     async function continueAfterProducts(job, panel) {
         try {
-            // v2.12 (Jeyson rule): the sheet column is the SOLE source of
-            // truth — blank -> auto-skip; non-empty -> prefill + human
-            // review/submit. The profile-check pass no longer overwrites it.
-            const skip = !job.row.existingPatient;
-            if (skip) {
-                // New patients: skip the questionnaire entirely (established flow).
-                // v2.0: report how many questionnaires were actually skipped so
-                // a 0 (questionnaire never appeared / button changed) is visible.
-                const skipResult = await resolveQuestionnaires(true);
-                setStatus(panel.status,
-                    skipResult.skipped > 0
-                        ? `Skipped ${skipResult.skipped} questionnaire(s).`
-                        : "No questionnaire appeared to skip — continuing.");
-                job.step = "ship-date";
-                saveJob(job);
-                await finishModulesStep(job, panel);
-            } else {
-                // Existing patients: prefill height/weight + safe defaults, then
-                // pause for a human to review and submit (never auto-submit).
-                await handleExistingPatientQuestionnaire(job, panel);
-            }
+            await handleQuestionnaireStep(job, panel);
         } catch (err) {
             setStatus(panel.status, `Failed: ${err.message}`, false, true);
         }
+    }
+
+    // v2.32: the peptide chooser. A purchase shorthand that fuzzy-matches the
+    // LIVE picker with no clear winner is put in front of Jeyson with its
+    // candidates ranked. Whichever he picks is LEARNED (localStorage), so the
+    // same shorthand resolves outright next time — that is the "pipe them up
+    // together" he asked for. The script never picks the peptide itself.
+    function renderAmbiguousChooser(job, panel, ambiguous, autoMatched) {
+        panel.body.innerHTML = "";
+        restoreManualNote(panel);
+        const status = document.createElement("div");
+        status.id = "psa-status";
+        panel.body.appendChild(status);
+        panel.status = status;
+        const pending = ambiguous.slice();
+
+        async function renderNext() {
+            if (!pending.length) {
+                apiSet('running', "Peptides chosen — continuing with questionnaire / ship date");
+                await continueAfterProducts(job, panel);
+                return;
+            }
+            const item = pending[0];
+            panel.body.innerHTML = "";
+            restoreManualNote(panel);
+            const head = document.createElement("div");
+            head.style.cssText = "font-weight:700;margin:6px 0;";
+            head.textContent = `Which peptide is "${item.alias}"?`;
+            panel.body.appendChild(head);
+            const sub = document.createElement("div");
+            sub.style.cssText = "font-size:12px;color:var(--ds-muted,#666);margin-bottom:6px;";
+            sub.textContent = "Ranked fuzzy match against the live product list. Picking one teaches the script this shorthand. None right — add it by hand."
+                + (autoMatched.length ? ` (Auto-matched: ${autoMatched.map((m) => `${m.alias} -> ${m.product}`).join("; ")})` : "");
+            panel.body.appendChild(sub);
+            for (const c of item.candidates) {
+                const b = document.createElement("button");
+                b.className = "psa-btn";
+                b.style.cssText = "display:block;width:100%;margin:4px 0;text-align:left;";
+                b.textContent = `${c.medType} › ${c.category} › ${c.tab} · ${c.product}  (${c.score})`;
+                b.addEventListener("click", async () => {
+                    learnAlias(item.alias, c.product);
+                    setStatus(status, `Learned "${item.alias}" = ${c.product} — adding it...`, true);
+                    try {
+                        await goToProduct(c.medType, c.category, c.product, c.tab, item.qty, item.requestedQty, item.capped, panel);
+                    } catch (err) {
+                        setStatus(status, `Failed: ${err.message}`, false, true);
+                        return;
+                    }
+                    pending.shift();
+                    renderNext();
+                });
+                panel.body.appendChild(b);
+            }
+            const skip = document.createElement("button");
+            skip.className = "psa-btn psa-btn-primary";
+            skip.textContent = "None of these — I'll add it myself";
+            skip.addEventListener("click", () => {
+                trace("selectModules ambiguous declined by human", item.alias);
+                pending.shift();
+                renderNext();
+            });
+            panel.body.appendChild(skip);
+            apiSet('waiting_human', `Which peptide is "${item.alias}"? ${item.candidates.length} candidates`);
+            trace("selectModules ambiguous", `${item.alias} -> ${item.candidates.map((c) => `${c.product} (${c.score})`).join(", ")}`);
+        }
+        renderNext();
     }
 
     // v2.19: the manual hand-off for purchase items with no alias/name match.
@@ -2194,6 +3400,7 @@ window.__scripts['PSA'] = {
     // entry they mean), then this resumes the automation — never auto-guessed.
     function renderUnmappedHandoff(job, panel, unmapped, addedCount, autoMatched) {
         panel.body.innerHTML = "";
+        restoreManualNote(panel);
         const resumeBtn = document.createElement("button");
         resumeBtn.className = "psa-btn psa-btn-primary";
         resumeBtn.textContent = "Added them manually — continue";
@@ -2219,9 +3426,11 @@ window.__scripts['PSA'] = {
     }
 
     async function finishModulesStep(job, panel) {
+        // v2.20: routed through applyShipDateIfAny so a non-date value (a "hold"
+        // instruction) can never abort the row before the Continue gate.
         if (job.row.shipDate) {
-            const ok = await setTransmitLaterDate(job.row.shipDate, panel);
-            if (!ok) return; // status already set by setTransmitLaterDate
+            const res = await applyShipDateIfAny(job.row.shipDate, panel);
+            if (res.status === "error") return; // status already set
         }
 
         let continueBtn = findByText("*", "Continue", true);
@@ -2296,6 +3505,39 @@ window.__scripts['PSA'] = {
                 padding: 1px 5px; font-size: 10px; font-weight: bold; font-family: monospace; margin-left: 4px; }
             .psa-note-warn { color: var(--ds-danger, #c0392b); font-size: 11px; margin-left: 4px; }
             .psa-purchase { color: #777; margin-left: 4px; }
+            /* v2.26 (DESIGN.md § Trigger contract): the panel is summoned from an
+               inline button in the site's own top navbar and is hidden at boot. */
+            #psa-close { font-size: 12px; font-weight: bold; padding: 2px 7px; border: 1px solid var(--ds-border, #ccc);
+                border-radius: 3px; background: var(--ds-surface2, #f8f8f8); color: var(--ds-text, #333); cursor: pointer; }
+            #psa-close:hover { background: var(--ds-danger, #b3402e); color: #fff; border-color: var(--ds-danger, #b3402e); }
+            /* v2.34 — the trigger is a GLYPH-ONLY cart button docked as the first item
+               of the navbar's search row (div.row > .search-col), i.e. immediately LEFT
+               of the search magnifier. Jeyson: "besides the search button… left side of
+               the search", then "just keep the cart icon" — so the state lives in the
+               colour and the title tooltip, not in a label.
+               WHY IT MOVED: measured live 2026-10-02, the site sets the navbar's LEFT
+               ul to display:none at wide widths — the old left-nav dock measured 0x0 at
+               a 1083px viewport. A docked button nobody can see at desktop width is the
+               bug behind "it's hard to find". The search row is visible at every width
+               (measured chip 271,16 at 1083px / 162,16 at 818px / 63,35 at 391px).
+               COST, measured and accepted: that row has only ~20px of slack (search 223
+               + filter 54 + clocks 487 inside a 784px row) and the clock cells cannot
+               shrink below their min-content, so ANY chip — even a 29px one — wraps the
+               clock row onto a second navbar line (nav height 72 -> 110 at 1083px). The
+               clocks stay fully readable, just below the search. */
+            #psa-trigger { flex: 0 0 auto; display: inline-flex; align-items: center;
+                justify-content: center; border: none; cursor: pointer; line-height: 1;
+                font-size: 15px; padding: 4px 8px; margin-right: 6px; border-radius: 6px;
+                background: var(--primary-color, #c9a227); color: #111;
+                box-shadow: 0 0 0 1px rgba(0, 0, 0, .18); }
+            #psa-trigger:hover { filter: brightness(.92); }
+            #psa-trigger.psa-state-run { background: var(--ds-warn, #a16207); color: #fff; }
+            #psa-trigger.psa-state-done { background: var(--ds-success, #3d7a46); color: #fff; }
+            #psa-trigger.psa-state-wait, #psa-trigger.psa-state-bad { background: var(--ds-danger, #b3402e); color: #fff; }
+            /* Fallback dock only: when a route renders no search row the button goes in
+               the navbar's left ul, where the flex rule must sit on the LI (the flex
+               item), not on the button inside it. */
+            .psa-trigger-item { flex: 0 0 auto !important; white-space: nowrap; }
         `;
         document.head.appendChild(style);
 
@@ -2384,6 +3626,17 @@ window.__scripts['PSA'] = {
         headerBtns.style.cssText = "display:flex; gap:4px; align-items:center;";
         headerBtns.appendChild(stopBtn);
         headerBtns.appendChild(resetBtn);
+        // v2.26: the panel's own exit (the other two exits are Esc and a click
+        // outside — see SECTION 8b).
+        const closeBtn = document.createElement("button");
+        closeBtn.id = "psa-close";
+        closeBtn.textContent = "✕";
+        closeBtn.title = "Close this panel (Esc or a click outside also work)";
+        closeBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            closePanel();
+        });
+        headerBtns.appendChild(closeBtn);
         header.appendChild(headerTitle);
         header.appendChild(headerBtns);
         panelEl.appendChild(header);
@@ -2422,12 +3675,140 @@ window.__scripts['PSA'] = {
             }
         } catch (err) { /* ignore */ }
 
+        // v2.26: HIDDEN at boot. The navbar trigger summons it (DESIGN.md says no
+        // always-on floating panel). It is hidden, never removed — every step of a
+        // running job writes into panel.body / panel.status, so removing the node
+        // mid-job would break the flow.
+        panelUI = { root: panelEl };
+        panelEl.style.display = "none";
         document.body.appendChild(panelEl);
 
         const panel = { root: panelEl, header, body, queueSection, status: null };
         renderInputStage(panel);
         renderQueueStrip(panel);
         return panel;
+    }
+
+    /* =========================================================================
+       SECTION 8b — TRIGGER + DISMISSAL (DESIGN.md § Trigger contract, 2026-10-02)
+       The trigger is docked INLINE in the site's own navbar SEARCH ROW (the div.row
+       that holds .search-col), as its first item — a cart-icon button immediately
+       left of the search magnifier. That row is the topmost element on every
+       authenticated route and is OUTSIDE the Vue router-view, so the content area
+       re-rendering all day never takes the button with it — and unlike the navbar's
+       left ul (display:none at wide widths) it is actually visible at desktop width.
+       Three exits: the panel's ✕, Escape, and a click anywhere outside it.
+       ========================================================================= */
+    let panelUI = null; // { root } — set by buildPanel()
+    let triggerEl = null;
+
+    function panelIsOpen() {
+        return !!panelUI && panelUI.root.style.display !== "none";
+    }
+
+    function detachPanelDismiss() {
+        document.removeEventListener("mousedown", onOutsidePress, true);
+        document.removeEventListener("keydown", onPanelKey, true);
+    }
+
+    function onOutsidePress(e) {
+        if (!panelUI) return;
+        const t = e.target;
+        if (panelUI.root.contains(t)) return; // clicks inside the panel keep it open
+        if (triggerEl && (triggerEl === t || triggerEl.contains(t))) return; // the trigger toggles
+        closePanel();
+    }
+
+    function onPanelKey(e) {
+        if (e.key === "Escape") closePanel();
+    }
+
+    function openPanel() {
+        if (!panelUI) return;
+        panelUI.root.style.display = "";
+        document.addEventListener("mousedown", onOutsidePress, true);
+        document.addEventListener("keydown", onPanelKey, true);
+    }
+
+    function closePanel() {
+        if (!panelUI) return;
+        panelUI.root.style.display = "none";
+        detachPanelDismiss();
+    }
+
+    // State readout on the trigger — a closed panel must not hide the job's state.
+    // The button carries no text (glyph only), so every state word lives in the title.
+    const TRIGGER_STATE = {
+        idle: { label: "Sale Automator", cls: "psa-state-idle", hint: "idle — click to paste rows" },
+        running: { label: "Running…", cls: "psa-state-run", hint: "running" },
+        waiting_human: { label: "Needs you", cls: "psa-state-wait", hint: "waiting for you" },
+        done: { label: "Done", cls: "psa-state-done", hint: "done" },
+        error: { label: "Blocked", cls: "psa-state-bad", hint: "blocked" }
+    };
+
+    function renderTrigger() {
+        if (!triggerEl) return;
+        const s = TRIGGER_STATE[api.state] || TRIGGER_STATE.idle;
+        triggerEl.className = s.cls;
+        // Colour alone cannot be read over a chat/notification glance, and there is no
+        // label: the tooltip is the state word.
+        triggerEl.title = "Sale Automator — " + s.hint
+            + (api.message ? " · " + api.message : "")
+            + " (✕ / Esc / click outside closes the panel)";
+    }
+
+    function buildTrigger() {
+        if (triggerEl && triggerEl.isConnected) return true;
+        // PRIMARY DOCK: the navbar's search row, as its FIRST item — immediately left of
+        // the search magnifier. The site hides the navbar's left ul at wide widths
+        // (measured: display:none, 0x0 at a 1083px viewport), so the old left-ul dock was
+        // invisible on a normal desktop. This row is present and visible at every width.
+        const searchCol = document.querySelector(".search-col");
+        const row = searchCol && searchCol.parentElement;
+        let host = row || null;
+        let fallbackLi = null;
+        if (!host) {
+            // FALLBACK: routes that render no search row get the navbar's left ul.
+            const nav = document.querySelector("nav.main-header > ul.navbar-nav:not(.ml-auto)");
+            const burgerLi = nav && nav.querySelector("li.nav-item");
+            if (!burgerLi) return false; // navbar not rendered yet (SPA boot)
+            fallbackLi = document.createElement("li");
+            fallbackLi.className = "nav-item psa-trigger-item";
+            host = fallbackLi;
+        }
+        const btn = document.createElement("button");
+        btn.id = "psa-trigger";
+        btn.type = "button";
+        btn.className = "psa-state-idle";
+        btn.textContent = "🛒"; // glyph only — the state is colour + tooltip
+        btn.title = "Sale Automator";
+        btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (panelIsOpen()) closePanel(); else openPanel();
+        });
+        if (fallbackLi) { burgerLi.after(fallbackLi); fallbackLi.appendChild(btn); }
+        else host.insertBefore(btn, host.firstChild);
+        triggerEl = btn;
+        renderTrigger();
+        return true;
+    }
+
+    // Re-dock if Vue ever re-renders the nav list out from under us. Debounced
+    // 250ms trailing (one scan per mutation burst), and it doubles as the boot
+    // wait for a navbar that has not rendered yet.
+    function watchTrigger() {
+        let timer = null;
+        const tryDock = () => {
+            if (timer) return;
+            timer = setTimeout(() => {
+                timer = null;
+                if (triggerEl && triggerEl.isConnected) return;
+                buildTrigger();
+            }, 250);
+        };
+        new MutationObserver(tryDock).observe(document.documentElement, { childList: true, subtree: true });
+        tryDock();
     }
 
     function renderInputStage(panel) {
@@ -2602,19 +3983,19 @@ window.__scripts['PSA'] = {
             if (summary.removed.length > 0) {
                 const rm = document.createElement("div");
                 rm.style.cssText = "border:1px solid #c0392b;border-radius:3px;padding:6px;margin-bottom:6px;background:#fdf3f2;";
-                rm.innerHTML = `🗑 <b>${summary.removed.length} removed</b> (no profile): ${summary.removed.map((r) => escHtml(rowLabel(r, false))).join(", ")}`;
+                rm.innerHTML = `🗑 <b>${summary.removed.length} removed</b> (no matching patient): ${summary.removed.map((r) => escHtml(rowLabel(r, false))).join(", ")}`;
                 panel.body.appendChild(rm);
             }
-            if (summary.ambiguous.length > 0) {
+            if (summary.removedUnmatched && summary.removedUnmatched.length > 0) {
                 const am = document.createElement("div");
-                am.style.cssText = "border:1px solid #e67e22;border-radius:3px;padding:6px;margin-bottom:6px;background:#fdf6ec;";
-                am.innerHTML = `⚠ <b>${summary.ambiguous.length} kept for review</b> (multiple matches): ${summary.ambiguous.map((r) => escHtml(rowLabel(r, false))).join(", ")}`;
+                am.style.cssText = "border:1px solid #c0392b;border-radius:3px;padding:6px;margin-bottom:6px;background:#fdf3f2;";
+                am.innerHTML = `🗑 <b>${summary.removedUnmatched.length} removed</b> (the search returned a different patient): ${summary.removedUnmatched.map((r) => escHtml(rowLabel(r, false))).join(", ")}`;
                 panel.body.appendChild(am);
             }
             if (summary.noId.length > 0) {
                 const ni = document.createElement("div");
                 ni.style.cssText = "border:1px solid #e67e22;border-radius:3px;padding:6px;margin-bottom:6px;background:#fdf6ec;";
-                ni.innerHTML = `⚠ <b>${summary.noId.length} kept</b> (no email/phone/name to check): ${summary.noId.map((r) => escHtml(rowLabel(r, false))).join(", ")}`;
+                ni.innerHTML = `⚠ <b>${summary.noId.length} kept</b> (no Patient ID / phone / full name to check): ${summary.noId.map((r) => escHtml(rowLabel(r, false))).join(", ")}`;
                 panel.body.appendChild(ni);
             }
         }
@@ -2782,8 +4163,10 @@ window.__scripts['PSA'] = {
 
     installNavInterceptor(); // capture window.open navigation before any step runs
     const panel = buildPanel();
+    watchTrigger(); // docks 🛒 Sale Automator in the top navbar (and keeps it docked)
     const existingJob = loadJob();
     if (existingJob) {
+        openPanel(); // a resumed job must be visible, not hidden behind a button
         panel.body.innerHTML = "";
         const status = document.createElement("div");
         status.id = "psa-status";
@@ -2792,9 +4175,147 @@ window.__scripts['PSA'] = {
         setStatus(status, `Resuming job at step "${existingJob.step}"...`);
         apiSet('running', `Resuming at step "${existingJob.step}"`, { progress: { step: existingJob.step } });
         runCurrentStep(panel);
+    } else {
+        startManualQuestionnaireAutofill(panel);
+    }
+
+    // v2.32: sweep the live picker while we are idle on a sale form, so name
+    // matching runs against the clinic's REAL product names. Never during a
+    // running job — the sweep clicks the picker around. The sale form is rendered
+    // by Vue AFTER this script boots, so the picker is waited for, not assumed.
+    if (!existingJob) {
+        (async () => {
+            // The picker renders PROGRESSIVELY: at boot only "Services" is in
+            // #medications-list, and sweeping then records an empty catalog
+            // (verified live 2026-10-02). Wait until the med-type row stops growing.
+            let last = -1, stable = 0;
+            for (let i = 0; i < 45; i++) {
+                await sleep(1000);
+                const count = document.querySelectorAll("#medications-list .btn").length;
+                if (count >= 2 && count === last) { if (++stable >= 2) break; } else { stable = 0; last = count; }
+            }
+            if (!document.querySelector("#medications-list") || loadJob()) return;
+            const s = await sweepLiveCatalog();
+            if (!s) return;
+            const d = catalogDrift();
+            api.message = `Live catalog swept: ${s.rows.length} products` +
+                (d && (d.gone.length || d.added.length) ? ` — drift vs the built-in list: ${d.gone.length} gone, ${d.added.length} new` : " — no drift");
+            console.info(`[PSA] ${api.message}`, d ? { gone: d.gone, added: d.added } : {});
+        })().catch((err) => console.warn("[PSA] catalog sweep failed:", err && err.message));
+    }
+
+    /* =========================================================================
+       SECTION 10b — MANUAL ORDERING AUTOFILL (no active job)
+       Jeyson's rule (2026-09-24): the questionnaire is autofilled "even when we
+       are doing manual ordering. That way it always fires the autofill."
+
+       With no job in localStorage the script used to sit idle on every page, so
+       a hand-built sale (the products added by hand, for a cart the script never
+       touched) got no help at all. This path fills that gap: on the sale form,
+       once the questionnaire renders, prefill it from the same answer bank.
+
+       Deliberately NARROW:
+       - only on the sale-form URL (/dashboard/PAT…/…/patient-sales), never on
+         the profile or list pages;
+       - only after a product is actually in the cart (the form is fetched by
+         cart drug ids, so an empty cart has nothing to fill);
+       - it never submits, never sets a ship date, never clicks Continue and
+         never touches a background tab. There is no job flow here, so the
+         handoff just offers a re-scan.
+       ========================================================================= */
+    function startManualQuestionnaireAutofill(panel) {
+        const onSaleForm = () => /^\/dashboard\/PAT\d+\//.test(location.pathname);
+        if (!onSaleForm()) return;
+
+        // ADDITIVE, never destructive: this runs at boot, before any job or
+        // paste-UI code has touched the panel. Wiping panel.body here would be
+        // fine at this instant but would erase the paste stage if anything
+        // re-entered later, so the manual notes get their own block appended
+        // after whatever is already there (and only once).
+        const note = document.createElement("div");
+        note.id = "psa-manual-note";
+        note.style.cssText = "margin-top:6px;padding-top:6px;border-top:1px dashed var(--ds-border, #e8e2d8);font-size:11px;";
+        panel.body.appendChild(note);
+        const render = (state, message) => {
+            note.replaceChildren();
+            const status = document.createElement("div");
+            status.id = "psa-manual-status";
+            status.textContent = message;
+            status.style.color = state === "done" ? "var(--ds-success, #3d7a46)"
+                : state === "error" ? "var(--ds-danger, #b3402e)"
+                : "var(--ds-muted, #7a7163)";
+            note.appendChild(status);
+            if (state === "done") {
+                const again = document.createElement("button");
+                again.className = "psa-btn";
+                again.textContent = "Re-scan the questionnaire";
+                again.addEventListener("click", () => { filled = false; tryFill(); });
+                note.appendChild(again);
+            }
+        };
+
+        let running = false;
+        // The observer below fires on EVERY cart/form mutation, and the form
+        // stays mounted after a prefill — without this latch the script would
+        // re-prefill in a loop the moment the human touched anything.
+        // Re-armed only by the explicit "Re-scan" button.
+        let filled = false;
+        const tryFill = async () => {
+            if (running || filled) return;
+            if (document.hidden) return; // never work a backgrounded tab unprompted
+            if (questionnaireIsPresent()) {
+                running = true;
+                apiSet('running', 'Manual ordering — autofilling the questionnaire');
+                try {
+                    await prefillSaleQuestionnaire(null, panel, true);
+                    filled = true;
+                    apiSet('waiting_human', 'Manual ordering — questionnaire prefilled, review and submit');
+                } catch (err) {
+                    filled = true; // don't hot-loop on a form we can't handle
+                    apiSet('error', `Manual questionnaire autofill failed: ${err.message}`);
+                    render("error", `Could not fill the questionnaire: ${err.message}`);
+                } finally {
+                    running = false;
+                }
+                return;
+            }
+            // Nothing yet — keep checking briefly, then say so (silence would
+            // look like the script is absent).
+            for (let i = 0; i < 12; i++) {
+                await sleep(500);
+                if (questionnaireIsPresent()) { tryFill(); return; }
+            }
+            render("idle", "Manual ordering — no questionnaire on this sale yet. Add the products and it fills automatically.");
+        };
+
+        // Explicit re-scan is the ONLY way to re-arm a completed fill.
+        api.manualQuestionnaireRescan = () => { filled = false; tryFill(); };
+
+        // The form mounts after the products are added, which may already have
+        // happened before this script booted — so check immediately, then watch.
+        tryFill();
+        const observer = new MutationObserver(() => { if (questionnaireIsPresent()) tryFill(); });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        // The observer alone would never fire if the form is already there, and
+        // it fires on every cart mutation — tryFill() is guarded by `running`
+        // and by questionnaireIsPresent(), so this stays cheap.
+        api.manualAutofill = { armed: true, onSaleForm: true };
     }
 
     // R18: trigger dispatcher (agent entry point)
+    // v2.23: what the routing advisory actually keyed on — the SHIPPING address
+    // state — plus the contact state it deliberately ignored. Agents and the live
+    // harness read this instead of guessing from api.routing.
+    api.stateRead = function () {
+      const m = harvestProfileMeasurements();
+      return {
+        shippingState: m.shippingState || "",
+        shippingStateRaw: m.shippingStateRaw || "",
+        contactState: m.state || "",
+        used: m.shippingState || "",
+        source: m.shippingState ? "shipping-address" : ""
+      };
+    };
     api.trigger = function (action, params) {
       if (action === 'start-row') {
         if (api.state === 'running' && !api.message.match(/stopped|idle/i)) {
@@ -2804,6 +4325,7 @@ window.__scripts['PSA'] = {
         if (q.length === 0) return { ok: false, error: 'queue is empty — paste rows first' };
         const row = params && params.id ? q.find(r => r._id === params.id) : q[0];
         if (!row) return { ok: false, error: 'row not found' };
+        openPanel(); // an agent-started run must be visible to the human
         startRow(panel, row);
         return { ok: true };
       }
@@ -2862,6 +4384,16 @@ window.__scripts['PSA'] = {
       if (action === 'get-queue') {
         const q = loadQueue() || [];
         return { ok: true, count: q.length, rows: q };
+      }
+      // R19: profile-check — run the SAME sweep the queue stage auto-runs after
+      // a paste: fill patient IDs on found rows, remove only rows whose profile
+      // was PROVEN absent, keep unconfirmed rows flagged for a human.
+      if (action === 'profile-check') {
+        const q = loadQueue() || [];
+        if (q.length === 0) return { ok: false, error: 'queue is empty — paste rows first' };
+        openPanel();
+        startProfileCheck(panel);
+        return { ok: true };
       }
       if (action === 'clear-queue') {
         clearQueue();

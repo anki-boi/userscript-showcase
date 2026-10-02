@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tracking Swiss Army Knife
 // @namespace    userscript-showcase
-// @version      1.0.13
+// @version      1.0.14
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  FedEx/UPS tracking panel: paste numbers, fetch full timelines, copy updates
@@ -16,14 +16,14 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TSAK v1.0.13] boot');
+console.info('[TSAK v1.0.14] boot');
 
 // --- Script API (R18) ---
 const __WIN = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window; // TM sandbox: page window lives here
 __WIN.__scripts = __WIN.__scripts || {};
 __WIN.__scripts['TSAK'] = {
   name: 'Tracking Swiss Army Knife',
-  version: '1.0.13',
+  version: '1.0.14',
   state: 'idle',
   message: '',
   progress: null,
@@ -403,8 +403,12 @@ const STATUS_STYLE = { Delivered: '#3d7a46', 'Out for Delivery': '#a16207', 'In 
   function bootPanel() {
     GM_addStyle(`
       :root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#fff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}
-      #tsak-arrow{position:fixed;right:0;top:45%;transform:translateY(-50%);z-index:2147483647;background:var(--ds-accent,#8a5f2e);color:#fff;border:none;border-radius:10px 0 0 10px;padding:12px 6px;font-size:16px;cursor:pointer;box-shadow:-2px 2px 8px rgba(0,0,0,.25);font-family:system-ui,sans-serif}
-      #tsak-arrow:hover{background:#a2743f}
+      /* Jeyson 2026-10-02: "it's fine to keep this one floating except the icon is
+         too annoying. let it be an inconspicuous icon and make it small" — a 22px
+         low-opacity dot on the right edge, not a 16px bronze tab with a shadow. */
+      #tsak-arrow{position:fixed;right:6px;top:45%;transform:translateY(-50%);z-index:2147483647;width:22px;height:22px;padding:0;border:none;border-radius:50%;background:rgba(138,95,46,.16);color:#8a5f2e;font-size:11px;line-height:22px;text-align:center;cursor:pointer;opacity:.45;box-shadow:none;font-family:system-ui,sans-serif;transition:opacity .15s ease,background .15s ease}
+      #tsak-arrow:hover,#tsak-arrow:focus{opacity:1;background:rgba(138,95,46,.45)}
+      #tsak-arrow.open{opacity:1;background:var(--ds-accent,#8a5f2e);color:var(--ds-accent-text,#fff)}
       #tsak-panel{position:fixed;top:45%;right:40px;width:360px;max-width:94vw;max-height:80vh;height:auto;z-index:2147483646;background:var(--ds-bg);border:1px solid var(--ds-border);border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.3);display:flex;flex-direction:column;font-family:system-ui,sans-serif;font-size:13px;color:var(--ds-text);transform:translateY(-50%) translateX(calc(100% + 60px));transition:transform .25s ease;overflow:hidden}
       #tsak-panel.open{transform:translateY(-50%) translateX(0)}
       #tsak-head{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--ds-surface);border-bottom:1px solid var(--ds-border)}
@@ -448,7 +452,7 @@ const STATUS_STYLE = { Delivered: '#3d7a46', 'Out for Delivery': '#a16207', 'In 
 
     /* ---------- panel DOM ---------- */
     const arrow = document.createElement('button');
-    arrow.id = 'tsak-arrow'; arrow.textContent = '\u{1F4E6}'; arrow.title = 'Tracking Swiss Army Knife';
+    arrow.id = 'tsak-arrow'; arrow.textContent = '\u21C5'; arrow.title = 'Tracking Swiss Army Knife — paste tracking numbers';
     const panel = document.createElement('div');
     panel.id = 'tsak-panel';
     panel.innerHTML = `
@@ -466,8 +470,21 @@ const STATUS_STYLE = { Delivered: '#3d7a46', 'Out for Delivery': '#a16207', 'In 
     const input = $('tsak-input'), pillsEl = $('tsak-pills'), fetchBtn = $('tsak-fetch'),
           statusEl = $('tsak-status'), cardsEl = $('tsak-cards');
 
-    arrow.addEventListener('click', () => panel.classList.toggle('open'));
-    $('tsak-close').addEventListener('click', () => panel.classList.remove('open'));
+    // DESIGN.md § Trigger contract: one summon control, three exits
+    // (its own ✕, Escape, a click anywhere outside — capture phase, ignoring
+    // the script's own UI). The floating dock stays: Jeyson kept this one floating.
+    const isOpen = () => panel.classList.contains('open');
+    const openPanel = () => { panel.classList.add('open'); arrow.classList.add('open'); };
+    const closePanel = () => { panel.classList.remove('open'); arrow.classList.remove('open'); };
+    arrow.addEventListener('click', () => { if (isOpen()) closePanel(); else openPanel(); });
+    $('tsak-close').addEventListener('click', closePanel);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) closePanel(); });
+    document.addEventListener('mousedown', (e) => {
+      if (!isOpen()) return;
+      const t = e.target;
+      if (t && t.closest && t.closest('#tsak-panel,#tsak-arrow')) return;
+      closePanel();
+    }, true);
 
     /* ---------- paste -> live detect ---------- */
     function parseTns(raw) {

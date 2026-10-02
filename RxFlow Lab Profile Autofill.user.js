@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RxFlow Lab Profile Autofill
 // @namespace    http://tampermonkey.net/
-// @version      1.4.7
+// @version      1.4.8
 // @description  Fills RxFlow Add Patient form from Zoho lab intent; one-shot, passive
 // @author       Jeyson Dagondon
 // @match        https://staff.exampleclinic.com/*
@@ -11,11 +11,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[PRX-Autofill v1.4.7] boot');
+console.info('[PRX-Autofill v1.4.8] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['PRX-Autofill'] = { name: 'RxFlow Lab Profile Autofill', version: '1.4.7', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['PRX-Autofill'] = { name: 'RxFlow Lab Profile Autofill', version: '1.4.8', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -150,6 +150,31 @@ window.__scripts['PRX-Autofill'] = { name: 'RxFlow Lab Profile Autofill', versio
         const exact = document.querySelector(`#${id}:not([type="checkbox"]):not([type="hidden"])`);
         return exact || document.getElementById(id);
     }
+    // v1.4.8: the DOB and Mobile inputs are Vue masked fields (vue-the-mask) that
+    // ignore synthetic input/change events and reset to empty. Write them through
+    // the form component's `form` model instead of setting el.value directly.
+    function formModel() {
+        for (const start of [getField('dob'), getField('first_name'), getField('mobile')]) {
+            if (!start) continue;
+            let n = start;
+            for (let i = 0; i < 12 && n; i++, n = n.parentElement) {
+                const v = n.__vue__;
+                if (v && v.form && typeof v.form === 'object' && ('dob' in v.form || 'first_name' in v.form)) return v;
+            }
+        }
+        return null;
+    }
+    function setFormField(name, value) {
+        const vm = formModel();
+        if (vm && vm.form) { vm.form[name] = value; return true; }
+        return false;
+    }
+    function fmtPhone(v) {
+        let d = String(v || '').replace(/\D/g, '');
+        while (d.length > 10 && d.startsWith('1')) d = d.slice(1);
+        d = d.slice(-10);
+        return d.length === 10 ? `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}` : '';
+    }
     // This site renders EVERYTHING asynchronously — waitFor accepts either a CSS
     // selector or a predicate function, and polls until the element is real.
     async function waitFor(sel, timeout = 20000) {
@@ -221,7 +246,6 @@ window.__scripts['PRX-Autofill'] = { name: 'RxFlow Lab Profile Autofill', versio
             { id: 'email',       label: 'Email',      val: intent.email },
             { id: 'postal_code', label: 'Postal Code', val: intent.zip },
             { id: 'city',        label: 'City',       val: intent.city },
-            { id: 'mobile',      label: 'Mobile',     val: intent.phone || intent.cell },
             { id: 'address_line1', label: 'Address 1', val: intent.address }
         ];
 
@@ -229,23 +253,29 @@ window.__scripts['PRX-Autofill'] = { name: 'RxFlow Lab Profile Autofill', versio
         // waves, and filling into a half-mounted form silently skipped the late
         // fields (name/phone/DOB came up empty in a re-render race). If some
         // never appear, they're listed as manual entries instead of skipped.
-        await waitFor(() => textMap.every((f) => getField(f.id)), 20000);
+        await waitFor(() => textMap.every((f) => getField(f.id)) && getField('dob') && getField('mobile'), 20000);
         for (const f of textMap) {
             const el = getField(f.id);
             if (!el) { missing.push(f.label); continue; }
             if (f.val) { setNativeValue(el, f.val); filled.push(f.label); }
-            else if (f.id === 'city' || f.id === 'postal_code' || f.id === 'mobile' || f.id === 'address_line1' || f.id === 'first_name' || f.id === 'last_name') glow(el);
+            else if (f.id === 'city' || f.id === 'postal_code' || f.id === 'address_line1' || f.id === 'first_name' || f.id === 'last_name') glow(el);
         }
 
-        // DOB -> MM-DD-YYYY
+        // DOB -> MM-DD-YYYY. The DOB input is a Vue masked field (vue-the-mask)
+        // that ignores synthetic events, so write it through the form model.
         if (intent.dob && intent.dob.m && intent.dob.d && intent.dob.y) {
-            const dobEl = getField('dob');
-            if (dobEl) {
-                setNativeValue(dobEl, `${pad2(intent.dob.m)}-${pad2(intent.dob.d)}-${intent.dob.y}`);
-                filled.push('DOB');
-            }
+            const dob = `${pad2(intent.dob.m)}-${pad2(intent.dob.d)}-${intent.dob.y}`;
+            if (setFormField('dob', dob)) filled.push('DOB');
+            else { glow(getField('dob')); missing.push('DOB'); }
         } else {
             glow(getField('dob'));
+        }
+
+        // Mobile -> ###-###-####. Same masked-field treatment as DOB.
+        {
+            const phone = fmtPhone(intent.phone || intent.cell);
+            if (phone && setFormField('mobile', phone)) filled.push('Mobile');
+            else { glow(getField('mobile')); missing.push('Mobile'); }
         }
 
         // Gender (payload f/m -> male/female)

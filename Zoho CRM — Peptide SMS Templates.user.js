@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zoho CRM — Peptide SMS Templates
 // @namespace    userscript-showcase
-// @version      5.19.0
+// @version      5.29.0
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @match        https://crm.zoho.com/*
@@ -10,12 +10,234 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[RxSMS v5.19.0] boot');
+console.info('[RxSMS v5.29.0] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', version: '5.19.0', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', version: '5.28.1', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
 
+// v5.28.0 CHANGES (2026-09-25):
+//  - Order Placed 2.0: Pharmacy K's lyophilized Tesamorelin / Ipamorelin moved
+//    OUT of the Pharmacy A blend's "Choose variant" picker and INTO the badged
+//    "Pharmacy K" chip group (Jeyson). The "Tesamorelin / Ipamorelin Blend" chip
+//    is now a one-click Pharmacy A leg with no question attached; the new chip
+//    sits beside GLOW / KLOW / GHK-Cu as "Tesamorelin / Ipamorelin" + the
+//    Pharmacy K badge and hops straight to 'Tesamorelin / Ipamorelin (Pharmacy K) /
+//    vial(s)'. Labels, TRACKING copy, OP2_OTHER_PHARMACY (pharmacy-direct
+//    flavor), dosing, guide link and split-shipment behavior are unchanged —
+//    only which chip carries the Pharmacy K vial.
+// v5.27.0 CHANGES (2026-09-25):
+//  - NEW LDN tab, leftmost and the default pane on open (Jeyson uses it most).
+//    FIVE click-to-copy templates — LDN Refill Initial Rx (Ordered), LDN
+//    Refill Rx SMS, LDN Refill Renewal Rx SMS, LDN Does Not Need a Refill,
+//    LDN 4.5mg Refill Confirmed — same interaction as the Reorder / Tracking
+//    lists. {NAME} / {ADDRESS} substitute at copy time.
+//  - Unified Parser and GLP-1 Parser tabs HIDDEN (display:none on the tab and
+//    the pane). Jeyson no longer uses either; the code stays so OP2's merged
+//    GLP-1 chip keeps its popup paste box, which routes through parseGLP1.
+//    Nothing else calls the Unified path. Both tabs are one attribute away
+//    from coming back.
+//
+// v5.26.0 CHANGES (2026-09-25):
+//  - MOTS-C (Pharmacy L) 20 mg/mL RETIRED (Jeyson — the sheet no longer offers
+//    it). Deleted the two TRACKING labels, the "MOTS-C (Pharmacy L)" chip, and
+//    every 20 mg/mL reference. The surviving vial is the 10 mg/mL one, so its
+//    name no longer carries a concentration at all: chip "MOTS-C (Pharmacy L)"
+//    (shown "MOTS-C"), label "MOTS-C (Pharmacy L) / vial(s)", 50 units (5 mg)
+//    twice weekly. Template Menu v6.31 drops the product and renames the
+//    surviving one "[BLRX] MOTS-C injectable".
+//  - NAD+ (Pharmacy L) moved to the 200 mg/mL / 5 mL vial: the SAME 80 mg dose is
+//    now 40 units (0.4 mL) instead of 80. 5 mL x 200 mg/mL = the 1000 mg the
+//    old 10 mL / 100 mg/mL vial held, so every Template Menu tier keeps its
+//    supply (4 weeks per vial, 80 mg three times a week) and its 1/2/3 Month
+//    name. This also RETIRES the long-standing "the sheet says 40 units
+//    (80 mg), it's a typo" note — at 200 mg/mL the sheet was right all along.
+//    Pharmacy A and Greenwich NAD+ are untouched (still 100 mg/mL).
+//  - VIAL COUNTS ARE GONE from every choose-a-tier label: one entry per DOSE,
+//    written "<base> / vial(s)" (or "/ bottle(s)" for the Pharmacy L NAD nasal
+//    spray), so no singular/plural decision is ever needed and no chip asks a
+//    question whose answer never reaches the patient. Collapsed: GHK-Cu /
+//    Tesamorelin / TB-500 / BPC-157 / Thymosin Alpha-1 / Pinealon (Pharmacy A),
+//    every Pharmacy L duplicate, Pharmacy K's Tesa-Ipamorelin / KLOW / GHK-Cu, and
+//    the Pharmacy L NAD nasal spray. Kept separate because the DOSE or tier name
+//    differs: NAD+ Light/Medium/Strong + the alt. dosing, Glow Blend Strong,
+//    Wolverine Light/Standard/Strong, Pregnyl TRT vs Fertility, MOTS-c's 8
+//    kits — those keep the count that tells them apart.
+//  - The patient-facing med line loses the count WITH the tier (med "2 GHK-Cu"
+//    -> "GHK-Cu", conc "/ 5mL vials" -> "5mL vial"); "vial(s)" is a LABEL
+//    word and never enters the SMS. Entries with no vial tier keep their legacy
+//    "1 <name>" med line exactly as it was. Order Placed 2.0 output is
+//    unchanged (its bare leg already dropped the quantity).
+
+// v5.25.0 CHANGES (2026-09-25):
+//  - Pharmacy L arrival window: every Pharmacy L-facing template now promises 4 days
+//    instead of the 10-day Pharmacy A timeline (Jeyson). Two new strings
+//    (PHARMACYL_FULFILLMENT = "Processing and shipping may take up to 4 days for
+//    your order to arrive. If you don't receive tracking by day 4, reply
+//    here.", PHARMACYL_NOTE = the Tracking-arrival flavor "Please allow up to 4
+//    days ...", multi-pharmacy sentence kept — SPLIT_NOTE_PHARMACY_J's shape).
+//  - Order Placed 2.0: OP2_FLAVOR.pharmacyl split off OP2_PHARMACYA_STYLE into its
+//    own body object (byte-identical body, 4-day fulfillment line) so the two
+//    can no longer drift. Only a Pharmacy L-ONLY order gets it: a MIXED
+//    Pharmacy A+Pharmacy L order keeps the Pharmacy A 10-day line, so the composer now
+//    asks for a bare Pharmacy A leg instead of any "Pharmacy A-style" leg.
+//  - Tracking & Dosing: labels in OP2_PHARMACYL swap SPLIT_NOTE for PHARMACYL_NOTE.
+//  - Unified Parser / GLP-1 Parser: a pasted block carrying the Pharmacy L partner
+//    marker ([BLRX] / "Pharmacy L" — Blue Five Labs / Greenstone Rx) gets the
+//    4-day note too (the engine keeps its own RXSMS_PHARMACYL_NOTE copy so the
+//    slice harness still runs standalone).
+//  - Unchanged: Pharmacy A + Pharmacy J + pharmacy-direct wording, the normal/delayed
+//    mode toggle, the Pharmacy A/Pharmacy L SHIPPING lines, and the split-shipment
+//    rules (Pharmacy L still never splits).
+
+// v5.24.0 CHANGES (2026-09-24):
+//  - Pharmacy K GHK-Cu RE-PINNED to the vial size Pharmacy K actually stocks. The
+//    pharmacy called in all three scripts: they were written for a 5mL vial,
+//    but Pharmacy K only stocks the 2mL size (50mg/2mL = 25mg/mL). All three
+//    scripts moved 25 units -> 10 units for the SAME 2.5 mg per injection, and
+//    Pharmacy K confirmed the duration is unchanged (60 injection days).
+//  - DOSE IS UNCHANGED: 25mg/mL x 0.10 mL = 2.5 mg, and 3 x 2mL = 6 mL is the
+//    same 60 doses of 0.10 mL the old 15 mL gave at 0.25 mL — so the 12-week
+//    5-on/2-off course and the "3 vials" tier both survive. Only the vial size,
+//    the concentration and the unit count moved.
+//  - Label wording is untouched ("GHK-Cu (Pharmacy K) / 3 vials", med "3 GHK-Cu")
+//    because the tier is still 3 vials; the conc string is now
+//    "25mg/mL, 2mL vials" and the rx now reads "Inject 10 units (2.5 mg) under
+//    the skin once daily, Monday through Friday."
+//  - The separate "Pharmacy K GHK-Cu" DOSE_RULES row (Mon-Fri cadence) is
+//    untouched — the schedule never changed.
+// v5.23.1 CHANGES (2026-09-23):
+//  - Vial configuration corrected (Jeyson): the Pharmacy K GHK-Cu Rx dispenses
+//    3 x 5mL vials = 15 mL, NOT one 15 mL vial. DOSE IS UNCHANGED — 10mg/mL is
+//    10mg/mL, and 3 x 5mL holds the same 15 mL the Rx's "Qty 15 Millilitre"
+//    states (= 60 doses of 0.25 mL = 12 weeks of 5-on/2-off, dispensed as a
+//    90-day supply). Only the vial wording moved: the label is now
+//    "GHK-Cu (Pharmacy K) / 3 vials" (med "3 GHK-Cu", conc "10mg/mL, 5mL vials"),
+//    mirroring the Pharmacy A / Pharmacy L vial-tiered labels, and the Template Menu
+//    tier is "3 vials / 90 days" with the block reading
+//    "Medication: 3 vials of 5mL Pharmacy K GHK-Cu".
+//  - 25 units = 2.5 mg once daily, Monday through Friday, is untouched, and so
+//    is the separate "Pharmacy K GHK-Cu" DOSE_RULES row.
+// v5.23.0 CHANGES (2026-09-23):
+//  - New product: Pharmacy K's OWN GHK-Cu, pinned to a real Rx (product
+//    "GHK-Cu (10mg/ml)", Qty 15 Millilitre, Days 90, Refills 0, sig
+//    "Dosing: 25 units once a day." + "Frequency: 5 days on and 2 Days off
+//    (Mon-Fri)").
+//    It is NOT the Pharmacy A "GHK-Cu Injection" row: same 10mg/mL concentration
+//    but 25 units (0.25 mL = 2.5 mg) 5 days on / 2 days off, where Pharmacy A's is
+//    12 units (1.2 mg) EVERY day. It is the same 2.5 mg/day the Pharmacy L
+//    50mg/mL rows give at 5 units, so the clinic's GHK-Cu target dose is 2.5 mg
+//    and only the vial/concentration changes per pharmacy.
+//    Tracking & Dosing: new label "GHK-Cu (Pharmacy K) / 1 vial" (med "1 GHK-Cu",
+//    conc "10mg/mL, 15mL vial", rx states the Mon-Fri schedule in full).
+//    Order Placed 2.0: a third badged Pharmacy K chip ("GHK-Cu"), and the label
+//    rides OP2_OTHER_PHARMACY so it composes the pharmacy-direct flavor and can
+//    never promise a Pharmacy A tracking text.
+//    Unified parser: new DOSE_RULES row "Pharmacy K GHK-Cu" (class inject,
+//    cadence "once daily, Monday through Friday"). It exists because
+//    DOSE_RULES is matched by DRUG NAME: with only the "GHK-Cu" row, an Pharmacy K
+//    GHK-Cu block would resolve to the Pharmacy A cadence and the patient text
+//    would promise DAILY dosing. The Pharmacy K Template Menu block therefore
+//    carries an "Pharmacy K" token in its Medication line ("1 vial of 15mL Pharmacy K
+//    GHK-Cu") — a parenthetical would not survive coreName(), which strips a
+//    trailing "(...)".
+//  - Pharmacy A's GHK-Cu rows (12 units / 1.2 mg / once daily, 5mL vials), the
+//    Pharmacy L rows (5 units / 2.5 mg / Mon-Fri, 50mg/mL) and every other
+//    template, label, chip and parser regex are untouched.
+// v5.22.1 CHANGES (2026-09-21):
+//  - Pharmacy K KLOW corrected against Jeyson's REAL order block (9/23/26):
+//      Medication: 2 vials of 10mL KLOW (BPC-157 / GHK-Cu / TB-500 / KPV)
+//      Concentration: 3mg / 3mg / 3mg / 10mg per mL
+//      Dosing: 20 units
+//      Frequency: 5 days on and 2 days off (Mon-Fri)
+//      Estimated Duration: 14 weeks
+//    Three things follow from it:
+//    1. SCHEDULE — 5 days on / 2 days off, NOT daily. "5 days on and 2 days
+//       off" does not match cadenceFromFreq(), so it never reaches the composer
+//       on its own; the KLOW DOSE_RULES cadence now reads "once daily, Monday
+//       through Friday" (the house phrasing for 5-on/2-off). The patient
+//       sentence was previously promising DAILY dosing.
+//    2. CONCENTRATION CONFIRMED — the real block repeats 3mg/3mg/3mg/10mg per
+//       mL, i.e. the Concentration column, not the sheet's per-vial 3/3/3/50.
+//       The 10x call made in v5.22.0 holds against a live order.
+//    3. TIER — the order is 2 vials / 14 weeks, so the label is now
+//       "KLOW (Pharmacy K) / 2 vials" (med line "2 KLOW ...", conc plural). The
+//       OP2 chip keeps the short name "KLOW (Pharmacy K)" and maps to it.
+//  - The dose itself is UNCHANGED: 20 units = 0.6 mg BPC-157 / 0.6 mg GHK-Cu /
+//    0.6 mg TB-500 / 2 mg KPV.
+//  - GLOW is untouched: it has no real order block yet and still runs once
+//    daily for 30 days. If GLOW also runs 5-on/2-off, its frequency line needs
+//    the same fix.
+//  - ADDITIVE otherwise: every other template, label, chip and parser regex is
+//    untouched.
+// v5.22.0 CHANGES (2026-09-21):
+//  - New products: Pharmacy K Pharma Rx's GLOW and KLOW (both "under Pharmacy K").
+//    GLOW is the SAME drug and the SAME concentration as the Pharmacy A Glow rows
+//    (27mg/5mg/10mg per 3mL vial = 1.66mg/9mg/3.33mg per mL), so the clinic's
+//    30 units is the identical 0.5 mg BPC-157 / 2.7 mg GHK-Cu / 1 mg TB-500 —
+//    only the fulfilling pharmacy and the label differ.
+//    KLOW is NOT the Greenwich [GRE] KLOW already in the table: Pharmacy K ships a
+//    10mL vial at 3mg/3mg/3mg/10mg per mL (BPC-157 / GHK-Cu / TB-500 / KPV), so
+//    20 units (0.2 mL) is 0.6 / 0.6 / 0.6 / 2 mg once daily. Jeyson confirmed
+//    2026-09-21 that the Pharmacy K sheet's CONCENTRATION column drives the dose;
+//    that sheet's per-vial totals (3/3/3/50 in 10mL) contradict it and are not
+//    used. Units are taken as given — they were explicitly confirmed correct.
+//    Tracking & Dosing: two new labels, "Glow Blend (Pharmacy K)" and
+//    "KLOW (Pharmacy K)", each carrying its own concentration and mg split.
+//    Order Placed 2.0: a NEW badged "Pharmacy K" chip group (same pattern as
+//    Pharmacy L) with a "Glow Blend" and a "KLOW" chip, and BOTH labels ride
+//    OP2_OTHER_PHARMACY so they compose the pharmacy-direct flavor and can
+//    never promise a Pharmacy A tracking text.
+//    A new op2SplitKey guard keeps Pharmacy K chips out of the Pharmacy A
+//    split-shipment picker (vial counts are not known for these tiers).
+//    Unified parser: new DOSE_RULES row "KLOW" (class inject, cadence "once
+//    daily", blend); GLOW resolves to the existing "Glow Blend" rule. Both
+//    Template Menu blocks are UNITS-ONLY on purpose — that is what makes the
+//    engine render EVERY component's mg; a spelled-out blend split in the
+//    Dosing line would pass through as its first value only.
+//  - FIX: the "Glow Blend" OP2 chip had no OP2_MAP entry, so it composed the
+//    "Not found in TRACKING table" placeholder. It now resolves to the two
+//    Pharmacy A tiers (the Pharmacy K vial is its own chip).
+//  - ADDITIVE otherwise: every existing template, label, chip and parser regex
+//    is untouched.
+// v5.21.0 CHANGES (2026-09-21):
+//  - New product: Pharmacy C's PINEALON (Template Menu v6.25). Reconstituted
+//    5 mL vial at 4 mg/mL = 20 mg total; the clinic's 25 units is 1 mg, so one
+//    vial is exactly 20 injection days (5 mL / 0.25 mL), then cycle off — the
+//    sheet's single "1 mth" tier.
+//    Tracking & Dosing: one new label, "Pinealon / 1 vial", at Pharmacy C's own
+//    concentration (4mg/mL, 5mL vial) with the daily 25-unit / 1 mg sentence and
+//    the cycle-off wording.
+//    Order Placed 2.0: a NEW (not variant) badged "Pinealon" chip, riding
+//    OP2_OTHER_PHARMACY — Pharmacy C is the pharmacy that already covers MOTS-c
+//    — so it composes the pharmacy-direct flavor and never promises a Pharmacy A
+//    tracking text. A new ORDER_ITEMS line was required (no existing chip names
+//    this drug).
+//    Unified parser: new DOSE_RULES row "Pinealon" (class inject, cadence
+//    "once daily for 20 days, then cycle off"); the block's given mg passes
+//    through verbatim, so the patient text reads 25 units (1 mg).
+//  - ADDITIVE otherwise: every other template and parser regex is untouched.
+// v5.20.0 CHANGES (2026-09-21):
+//  - New product: Pharmacy K Pharma Rx's LYOPHILIZED Tesamorelin / Ipamorelin
+//    (Template Menu v6.24). Powdered 10 mg Tesa + 5 mg Ipa per vial,
+//    reconstituted to 2 mL with BAC water (= 5mg/2.5mg per mL): the clinic's
+//    20 units is 1 mg / 0.5 mg, nightly Monday through Friday, and one vial
+//    lasts 10 injection days = 2 weeks, so the tiers are 2/4/6 vials for
+//    4/8/12 weeks.
+//    Tracking & Dosing: three new labels, "Tesamorelin / Ipamorelin (Pharmacy K) /
+//    2|4|6 vials", carrying Pharmacy K's own concentration, the reconstitution
+//    step, and the MOTS-c guide link (both are powder kits).
+//    Order Placed 2.0: the Pharmacy K tiers are variants of the EXISTING
+//    "Tesamorelin / Ipamorelin Blend" chip (same drug, different vial), and all
+//    three labels ride OP2_OTHER_PHARMACY — Pharmacy K is the pharmacy that already
+//    covers DSIP Injection — so they compose the pharmacy-direct flavor and
+//    never promise a Pharmacy A tracking text.
+//    Unified parser: new DOSE_RULES row "Lyophilized Tesamorelin / Ipamorelin"
+//    (route reconstitute, sentence wins). The word "Lyophilized" is load-bearing
+//    — coreName() strips a trailing "(lyophilized)", so the plain spelling would
+//    resolve to the old 3mg/2mg row and render only the first blend component.
+//  - ADDITIVE otherwise: the Pharmacy A blend row, its vial, every other template
+//    and every parser regex are untouched (pinned by smoke-unified-engine case 9).
 // v5.19.0 CHANGES (2026-09-16):
 //  - MOTS-C gets Pharmacy L's 10 mg/mL option (Template Menu v6.23). Same drug,
 //    half the concentration: a 5 mL vial holds 50 mg, so the clinic's 5 mg dose
@@ -261,9 +483,40 @@ window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', versio
 (function () {
   'use strict';
 
-  const __VER__ = '5.19.0'; // keep in sync with @version (gate FAILs on drift)
+  const __VER__ = '5.29.0'; // keep in sync with @version (gate FAILs on drift)
 
   const RL_ID = '4159382000379742568'; // ABR RingCentral SMS related list
+
+  // ---- LDN (2026-09-25) ---------------------------------------------------
+  // Leftmost tab, default on open. Static refill templates, click-to-copy,
+  // {NAME} / {ADDRESS} substituted at copy time (same convention as HEAD).
+  // Only "LDN Refill Rx SMS" uses {ADDRESS}; the others use {NAME} alone.
+  const LDN_TEMPLATES = {
+    'LDN Refill Initial Rx (Ordered)': `Hi {NAME}. this is Dr. Example's Order Processing Department. I just wanted to let you know that your Low-Dose Naltrexone prescription has been sent to the pharmacy. They'll be reaching out to you soon from 800-525-9473 / 877-827-5788.
+
+If you'd like to expedite the process, you're welcome to call the number directly to complete the next steps. Kindly wait for a few hours before calling for them to process the order.
+
+Guide Here: https://linktr.ee/cms_programs.
+
+If you have any questions, please text our medical team at: (719) 457-5498.`,
+    'LDN Refill Rx SMS': `Hi {NAME}. this is Dr. Example' Order Processing Department, I hope you're doing well! I just wanted to check in—do you need a refill for your Low-Dose Naltrexone at this time?
+
+If so, could you please confirm your current dose? Specifically, how many pills are you taking, and what is the strength (mg) of each pill?
+
+Please also confirm that the shipping address below is correct:
+{ADDRESS}
+
+Thank you!`,
+    'LDN Refill Renewal Rx SMS': `Hi {NAME}, this is Dr. Example' Order Processing team. Hope you've been doing well on your Low-Dose Naltrexone. We wanted to check in and see if you're ready to continue your treatment.
+
+To keep things going, we'll renew your LDN Management Program. That covers your provider oversight, dose guidance, refills, and regular check-ins so your treatment stays consistent.
+
+You can renew for $420 for the year, or $80 for the first month and $40/month after that for the rest of the year. Your LDN itself is billed separately by the pharmacy.
+
+Just let us know you'd like to continue and we'll take it from there!`,
+    'LDN Does Not Need a Refill': `Got it! We'll note that you do not need an LDN refill at this time. Please reach out whenever you're ready for one.`,
+    'LDN 4.5mg Refill Confirmed': `Got it! We'll send the refill prescription to the pharmacy. For this next refill, you'll only need to take one capsule each night since the new strength will be 4.5 mg.`,
+  };
 
   // ---- TAB 1: REORDER TEMPLATES -------------------------------------------
   const PEPTIDES = {
@@ -312,7 +565,7 @@ window.__scripts['RxSMS'] = { name: 'Zoho CRM — Peptide SMS Templates', versio
 
   function buildReorderMessage(firstName, cfg, address) {
     if (Array.isArray(cfg.items) && cfg.items.length) {
-      return `Hi ${firstName}! This is Dr. Jones' Order Processing Department. Your ${formatOrderList(cfg.items)} are due to be ordered today. This is already covered in your plan so nothing extra is needed on your end.
+      return `Hi ${firstName}! This is Dr. Example' Order Processing Department. Your ${formatOrderList(cfg.items)} are due to be ordered today. This is already covered in your plan so nothing extra is needed on your end.
 
 Address on file:
 ${address}
@@ -322,7 +575,7 @@ ${FULFILLMENT.reorder[fulfillmentMode()]}
 If you will not be at this address ${FULFILLMENT.addressWindow[fulfillmentMode()]}, or if you'd prefer us to ship to a different address, please let us know as soon as possible so we can update your order before it ships.`;
     }
     const vialWord = cfg.vials === 1 ? "vial is" : "vials are";
-    return `Hi ${firstName}! This is Dr. Jones' Order Processing Department. Your ${cfg.vials} ${cfg.nickname} ${vialWord} due to be ordered today. This is already covered in your plan so nothing extra is needed on your end.
+    return `Hi ${firstName}! This is Dr. Example' Order Processing Department. Your ${cfg.vials} ${cfg.nickname} ${vialWord} due to be ordered today. This is already covered in your plan so nothing extra is needed on your end.
 
 Address on file:
 ${address}
@@ -342,7 +595,7 @@ One quick note: we ship peptides a few vials at a time because they have a limit
   const GUIDE_6MO = 'https://securelinks.drdeanjones.com/yrx6y9wz';   // 6 Month Warrior
 
   // Message parts
-  const HEAD = "Hi {NAME}! This is Dr. Jones's Order Processing Team. We just received the tracking details for your order.\n{TRACKING}";
+  const HEAD = "Hi {NAME}! This is Dr. Example's Order Processing Team. We just received the tracking details for your order.\n{TRACKING}";
   const SPLIT_NOTE = "Tracking may take 2-3 business days to update after the label is created. If your order includes medications from different pharmacies, you'll receive separate tracking messages from each pharmacy, which may come from different phone numbers.";
 
   // ---- PHARMACY J (2026-08-11) ------------------------------------------------
@@ -353,7 +606,23 @@ One quick note: we ship peptides a few vials at a time because they have a limit
   // stacks. PHARMACY_J_TRACKING keys must match TRACKING entry labels;
   // PHARMACY_J_ORDER_ITEMS must match ORDER_ITEMS chip names.
   const SPLIT_NOTE_PHARMACY_J = "Please allow up to 10 days for your order to arrive. If your order includes medications from different pharmacies, you'll receive separate tracking messages from each pharmacy, which may come from different phone numbers.";
-  const ORDER_PLACED_PHARMACY_J = "Your order is being prepared by our compounding pharmacy. Please allow up to 10 days for it to arrive. Once the pharmacy has finished processing your order, you'll receive your shipping confirmation, tracking information, and dosing instructions directly from the pharmacy. Please keep an eye on both your email and text messages, as these updates may come from the pharmacy instead of Dr. Jones' team.";
+  const ORDER_PLACED_PHARMACY_J = "Your order is being prepared by our compounding pharmacy. Please allow up to 10 days for it to arrive. Once the pharmacy has finished processing your order, you'll receive your shipping confirmation, tracking information, and dosing instructions directly from the pharmacy. Please keep an eye on both your email and text messages, as these updates may come from the pharmacy instead of Dr. Example' team.";
+
+  // ---- PHARMACYL ARRIVAL WINDOW (2026-09-25) -------------------------------
+  // Pharmacy L compounds and ships fast, so every Pharmacy L-facing template promises
+  // 4 days instead of Pharmacy A's 10-day timeline (Jeyson). Fixed wording like
+  // Pharmacy J's: the normal/delayed toggle does not touch it. Pharmacy A, Pharmacy J and
+  // the pharmacy-direct copy are unchanged, and a MIXED Pharmacy A+Pharmacy L order
+  // keeps Pharmacy A's line — never promise 4 days for a Pharmacy A vial.
+  // PHARMACYL_FULFILLMENT = Order Placed 2.0 timeline line.
+  // PHARMACYL_NOTE = Tracking-arrival note (SPLIT_NOTE_PHARMACY_J's shape: fixed
+  // arrival window with the multi-pharmacy sentence kept).
+  const PHARMACYL_FULFILLMENT = 'Processing and shipping may take up to 4 days for your order to arrive. If you don\'t receive tracking by day 4, reply here.';
+  const PHARMACYL_NOTE = "Please allow up to 4 days for your order to arrive. If your order includes medications from different pharmacies, you'll receive separate tracking messages from each pharmacy, which may come from different phone numbers.";
+  // Same marker the Order Placed 2.0 GLP-1 chip and the GLP-1 / Unified
+  // parsers read off a pasted block (the engine slice keeps its own literal —
+  // it is evaluated standalone, so it cannot see this const).
+  const PHARMACYL_RE = /\[BLRX\]|pharmacyl/i;
   const PHARMACY_J_TRACKING = new Set([
     // Oral / Topical / Nasal
     "5-Amino-1MQ Pill",
@@ -398,26 +667,13 @@ One quick note: we ship peptides a few vials at a time because they have a limit
   // OP2_PHARMACYL keys must match TRACKING entry labels (they also drive the
   // op2PharmacyFor() class, the OP2 chips via OP2_MAP, and the panel badges).
   const OP2_PHARMACYL = new Set([
-    "BPC-157 Injection (Pharmacy L) / 1 vial",
-    "BPC-157 Injection (Pharmacy L) / 2 vials",
-    "BPC-157 Injection (Pharmacy L) / 3 vials",
-    "TB-500 (Pharmacy L) / 1 vial",
-    "TB-500 (Pharmacy L) / 2 vials",
-    "GHK-Cu Injection (Pharmacy L) / 1 vial",
-    "GHK-Cu Injection (Pharmacy L) / 2 vials",
-    "GHK-Cu Injection (Pharmacy L) / 3 vials",
-    "MOTS-C (Pharmacy L) / 1 vial",
-    "MOTS-C (Pharmacy L) / 2 vials",
-    "MOTS-C 10mg/mL (Pharmacy L) / 2 vials",
-    "MOTS-C 10mg/mL (Pharmacy L) / 4 vials",
-    "NAD+ (Pharmacy L) / 1 vial",
-    "NAD+ (Pharmacy L) / 2 vials",
-    "NAD+ (Pharmacy L) / 3 vials",
-    "NAD Nasal Spray (Pharmacy L) / 1 bottle",
-    "NAD Nasal Spray (Pharmacy L) / 2 bottles",
-    "Tesamorelin (Pharmacy L) / 1 vial",
-    "Tesamorelin (Pharmacy L) / 2 vials",
-    "Tesamorelin (Pharmacy L) / 3 vials",
+    "BPC-157 Injection (Pharmacy L) / vial(s)",
+    "TB-500 (Pharmacy L) / vial(s)",
+    "GHK-Cu Injection (Pharmacy L) / vial(s)",
+    "MOTS-C (Pharmacy L) / vial(s)",
+    "NAD+ (Pharmacy L) / vial(s)",
+    "NAD Nasal Spray (Pharmacy L) / bottle(s)",
+    "Tesamorelin (Pharmacy L) / vial(s)",
   ]);
   const NO_INC = 'Please do not increase your dose unless instructed by our Medical Team.';
   const PICKUP = '';
@@ -451,8 +707,8 @@ One quick note: we ship peptides a few vials at a time because they have a limit
       delayed: 'within the next two weeks or so',
     },
     orderPlaced: {
-      normal: "Orders can take up to one week to complete. Once the pharmacy has finished processing your order, you'll receive your shipping confirmation, tracking information, and dosing instructions directly from the pharmacy. Please keep an eye on both your email and text messages, as these updates may come from the pharmacy instead of Dr. Jones' team.",
-      delayed: "Due to additional quality testing on compounded medications and high order volumes across the industry, pharmacies are experiencing longer-than-normal processing times, so your order may take up to 10 days to arrive. If you haven't received tracking information by day 7, reach out to our team for an order status update. Once the pharmacy has finished processing your order, you'll receive your shipping confirmation, tracking information, and dosing instructions directly from the pharmacy. Please keep an eye on both your email and text messages, as these updates may come from the pharmacy instead of Dr. Jones' team.",
+      normal: "Orders can take up to one week to complete. Once the pharmacy has finished processing your order, you'll receive your shipping confirmation, tracking information, and dosing instructions directly from the pharmacy. Please keep an eye on both your email and text messages, as these updates may come from the pharmacy instead of Dr. Example' team.",
+      delayed: "Due to additional quality testing on compounded medications and high order volumes across the industry, pharmacies are experiencing longer-than-normal processing times, so your order may take up to 10 days to arrive. If you haven't received tracking information by day 7, reach out to our team for an order status update. Once the pharmacy has finished processing your order, you'll receive your shipping confirmation, tracking information, and dosing instructions directly from the pharmacy. Please keep an eye on both your email and text messages, as these updates may come from the pharmacy instead of Dr. Example' team.",
     },
     stillProcessing: {
       normal: 'It can take up to 7 business days for them to compound and ship.',
@@ -461,7 +717,10 @@ One quick note: we ship peptides a few vials at a time because they have a limit
   };
 
   // Entry shape:
-  //   med     - quantity + product name
+  //   med     - product name. NO quantity (v5.26.0): the vial count lives in
+  //             the LABEL as a panel choice, never in patient text, so a
+  //             collapsed "<name> / vial(s)" entry carries none. Entries with
+  //             no vial tier keep their legacy "1 <name>" form untouched.
   //   conc    - concentration string, now shown to the patient in parentheses
   //   medLine - overrides med/conc entirely with a prebuilt Medication line
   //   rx      - the full dosing instruction, mg included behind units
@@ -470,6 +729,11 @@ One quick note: we ship peptides a few vials at a time because they have a limit
   //   note    - extra paragraph appended after the rx block (storage etc.)
   //   body    - overrides med/conc/rx entirely for multi-medication stacks
   //   flags   - array of dose-math warnings, surfaced in the copy toast
+  // Label rule (v5.26.0): a tier that differs ONLY by vial/bottle count is a
+  // single "<base> / vial(s)" entry — no singular/plural, no count. Tiers whose
+  // DOSE or tier name differs (NAD+ Light/Medium/Strong, Glow 3v vs 6v Strong,
+  // Wolverine, NAD+ Strong alt. dosing, Pregnyl TRT vs Fertility, MOTS-c kits)
+  // stay separate entries and keep the count that distinguishes them.
   const TRACKING = {
 
 "Injectables": {
@@ -478,59 +742,49 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         conc: "1.5mg/2.5mg per mL, 6mL vial",
         rx: "Inject 7 units (0.1 mg CJC / 0.2 mg Ipamorelin) under the skin twice daily, for a total of 14 units per day. Use in the morning while fasted and again before bed. Use 5 days on and 2 days off.",
       },
-      "GHK-Cu Injection / 1 vial": {
-        med: "1 GHK-Cu",
+      "GHK-Cu Injection / vial(s)": {
+        med: "GHK-Cu",
         conc: "10mg/mL, 5mL vial",
         rx: "Inject 12 units (1.2 mg) under the skin once daily.",
       },
-      "GHK-Cu Injection / 2 vials": {
-        med: "2 GHK-Cu",
-        conc: "10mg/mL, 5mL vials",
-        rx: "Inject 12 units (1.2 mg) under the skin once daily.",
-      },
-      "Glow Blend / 3 vials": {
-        med: "3 Glow Blend (BPC-157 / GHK-Cu / TB-500)",
-        conc: "1.66mg/9mg/3.33mg per mL, 3mL vials",
+      "Glow Blend / vial(s)": {
+        med: "Glow Blend (BPC-157 / GHK-Cu / TB-500)",
+        conc: "1.66mg/9mg/3.33mg per mL, 3mL vial",
         rx: "Inject 30 units (0.5 mg BPC-157 / 2.7 mg GHK-Cu / 1 mg TB-500) under the skin once daily.",
       },
-      "Glow Blend / 6 vials (Strong)": {
-        med: "6 Glow Blend (BPC-157 / GHK-Cu / TB-500)",
-        conc: "1.66mg/9mg/3.33mg per mL, 3mL vials",
+      "Glow Blend / vial(s) (Strong)": {
+        med: "Glow Blend (BPC-157 / GHK-Cu / TB-500)",
+        conc: "1.66mg/9mg/3.33mg per mL, 3mL vial",
         rx: "Inject 60 units (1 mg BPC-157 / 5.4 mg GHK-Cu / 2 mg TB-500) under the skin once daily.",
       },
-      "Wolverine Light / 2 vials": {
-        med: "2 Wolverine Blend (BPC-157 / TB-500)",
-        conc: "1.66mg/3.33mg per mL, 3mL vials",
+      "Wolverine Light / vial(s)": {
+        med: "Wolverine Blend (BPC-157 / TB-500)",
+        conc: "1.66mg/3.33mg per mL, 3mL vial",
         rx: "Inject 20 units (0.33 mg BPC-157 / 0.67 mg TB-500) under the skin once daily.",
       },
-      "Wolverine Standard / 3 vials": {
-        med: "3 Wolverine Blend (BPC-157 / TB-500)",
-        conc: "1.66mg/3.33mg per mL, 3mL vials",
+      "Wolverine Standard / vial(s)": {
+        med: "Wolverine Blend (BPC-157 / TB-500)",
+        conc: "1.66mg/3.33mg per mL, 3mL vial",
         rx: "Inject 30 units (0.5 mg BPC-157 / 1 mg TB-500) under the skin once daily.",
       },
-      "Wolverine Strong / 6 vials": {
-        med: "6 Wolverine Blend (BPC-157 / TB-500)",
-        conc: "1.66mg/3.33mg per mL, 3mL vials",
+      "Wolverine Strong / vial(s)": {
+        med: "Wolverine Blend (BPC-157 / TB-500)",
+        conc: "1.66mg/3.33mg per mL, 3mL vial",
         rx: "Inject 60 units (1 mg BPC-157 / 2 mg TB-500) under the skin once daily.",
       },
-      "TB-500 / 3 vials": {
-        med: "3 TB-500",
-        conc: "3.33mg/mL, 3mL vials",
+      "TB-500 / vial(s)": {
+        med: "TB-500",
+        conc: "3.33mg/mL, 3mL vial",
         rx: "Inject 30 units (1 mg) under the skin once daily.",
       },
-      "BPC-157 Injection / 1 vial": {
-        med: "1 BPC-157",
+      "BPC-157 Injection / vial(s)": {
+        med: "BPC-157",
         conc: "3mg/mL, 5mL vial",
         rx: "Inject 17 units (0.51 mg) into the muscle once daily at the injury site as directed.",
       },
-      "Tesamorelin / 2 vials": {
-        med: "2 Tesamorelin",
-        conc: "2mg/mL, 5mL vials",
-        rx: "Inject 50 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
-      },
-      "Tesamorelin / 4 vials": {
-        med: "4 Tesamorelin",
-        conc: "2mg/mL, 5mL vials",
+      "Tesamorelin / vial(s)": {
+        med: "Tesamorelin",
+        conc: "2mg/mL, 5mL vial",
         rx: "Inject 50 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
       },
       "Tesamorelin / Ipamorelin Blend": {
@@ -538,108 +792,63 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         conc: "3mg/2mg per mL, 5mL vial",
         rx: "Inject 20 units (0.6 mg Tesamorelin / 0.4 mg Ipamorelin) under the skin every night at bedtime, Monday through Friday.",
       },
+      // ---- Pharmacy K Pharma Rx (Template Menu v6.24, 2026-09-21) --------------
+      // Same drug as the blend above, DIFFERENT vial: Pharmacy K ships it
+      // lyophilized, 10 mg Tesa + 5 mg Ipa per vial, reconstituted to 2 mL with
+      // BAC water (= 5mg/2.5mg per mL), so the clinic's 20 units is 1 mg / 0.5 mg
+      // and one vial lasts 10 injection days (2 weeks at 5 days a week). Powder
+      // kits use the MOTS-c guide link. Same pharmacy as DSIP Injection, so these
+      // labels ride OP2_OTHER_PHARMACY - never a Pharmacy A tracking promise.
+      "Tesamorelin / Ipamorelin (Pharmacy K) / vial(s)": {
+        med: "Tesamorelin / Ipamorelin",
+        conc: "10mg/5mg per 2mL vial",
+        rx: "Reconstitute one vial with 2 mL of bacteriostatic water, then inject 20 units (1 mg Tesamorelin / 0.5 mg Ipamorelin) under the skin every night at bedtime, Monday through Friday.",
+        link: GUIDE_TA1,
+      },
       // ---- Pharmacy L duplicates (Template Menu > Pharmacy L, 2026-09-11) --------
       // Deliberately the same drugs as Pharmacy A above, at Pharmacy L's own
       // concentrations (Template Menu Pharmacy L branch, v6.20 + v6.21).
       // Labels carry "(Pharmacy L)" so the panel and the OP2 pharmacy class can
       // tell them apart; the patient-facing med strings stay clean. The vial
-      // count is the Template Menu tier multiple (one vial = one Duration
-      // column), so the wording differs per product while the shape does not.
-      "BPC-157 Injection (Pharmacy L) / 1 vial": {
-        med: "1 BPC-157",
+      // count is a Template Menu tier multiple, never patient text, so since
+      // v5.26.0 every label ends in "/ vial(s)" (one entry per DOSE, not per
+      // vial count).
+      "BPC-157 Injection (Pharmacy L) / vial(s)": {
+        med: "BPC-157",
         conc: "5mg/mL, 5mL vial",
         rx: "Inject 20 units (1 mg) into the muscle once daily at the injury site.",
       },
-      "BPC-157 Injection (Pharmacy L) / 2 vials": {
-        med: "2 BPC-157",
-        conc: "5mg/mL, 5mL vials",
-        rx: "Inject 20 units (1 mg) into the muscle once daily at the injury site.",
-      },
-      "BPC-157 Injection (Pharmacy L) / 3 vials": {
-        med: "3 BPC-157",
-        conc: "5mg/mL, 5mL vials",
-        rx: "Inject 20 units (1 mg) into the muscle once daily at the injury site.",
-      },
-      "TB-500 (Pharmacy L) / 1 vial": {
-        med: "1 TB-500",
+      "TB-500 (Pharmacy L) / vial(s)": {
+        med: "TB-500",
         conc: "10mg/mL, 5mL vial",
         rx: "Inject 10 units (1 mg) under the skin once daily.",
       },
-      "TB-500 (Pharmacy L) / 2 vials": {
-        med: "2 TB-500",
-        conc: "10mg/mL, 5mL vials",
-        rx: "Inject 10 units (1 mg) under the skin once daily.",
-      },
-      "GHK-Cu Injection (Pharmacy L) / 1 vial": {
-        med: "1 GHK-Cu",
+      "GHK-Cu Injection (Pharmacy L) / vial(s)": {
+        med: "GHK-Cu",
         conc: "50mg/mL, 3mL vial",
         rx: "Inject 5 units (2.5 mg) under the skin once daily, Monday through Friday.",
       },
-      "GHK-Cu Injection (Pharmacy L) / 2 vials": {
-        med: "2 GHK-Cu",
-        conc: "50mg/mL, 3mL vials",
-        rx: "Inject 5 units (2.5 mg) under the skin once daily, Monday through Friday.",
-      },
-      "GHK-Cu Injection (Pharmacy L) / 3 vials": {
-        med: "3 GHK-Cu",
-        conc: "50mg/mL, 3mL vials",
-        rx: "Inject 5 units (2.5 mg) under the skin once daily, Monday through Friday.",
-      },
-      "MOTS-C (Pharmacy L) / 1 vial": {
-        med: "1 MOTS-C",
-        conc: "20mg/mL, 5mL vial",
-        rx: "Inject 25 units (5 mg) under the skin twice weekly in the morning or before your workout.",
-      },
-      "MOTS-C (Pharmacy L) / 2 vials": {
-        med: "2 MOTS-C",
-        conc: "20mg/mL, 5mL vials",
-        rx: "Inject 25 units (5 mg) under the skin twice weekly in the morning or before your workout.",
-      },
-      // MOTS-C at Pharmacy L's OTHER concentration (v5.19.0, Template Menu v6.23).
-      // A 5 mL vial at 10 mg/mL holds 50 mg, so the SAME 5 mg dose is 50 units
-      // (0.5 mL) instead of 25, and 5 mg twice weekly = 5 weeks per vial:
-      // 2 vials = 10 weeks / 2.5 months, 4 vials = 20 weeks / 5 months. These
-      // labels exist so the patient text never states the 20 mg/mL vial.
-      "MOTS-C 10mg/mL (Pharmacy L) / 2 vials": {
-        med: "2 MOTS-C",
-        conc: "10mg/mL, 5mL vials",
+      // MOTS-C: Pharmacy L ONLY ships the 10 mg/mL vial now (the 20 mg/mL sheet
+      // option was discontinued 2026-09-25), so the label no longer spells the
+      // concentration out — a 5 mL vial at 10 mg/mL holds 50 mg, making the
+      // clinic's 5 mg dose 50 units (0.5 mL) twice weekly.
+      "MOTS-C (Pharmacy L) / vial(s)": {
+        med: "MOTS-C",
+        conc: "10mg/mL, 5mL vial",
         rx: "Inject 50 units (5 mg) under the skin twice weekly in the morning or before your workout.",
       },
-      "MOTS-C 10mg/mL (Pharmacy L) / 4 vials": {
-        med: "4 MOTS-C",
-        conc: "10mg/mL, 5mL vials",
-        rx: "Inject 50 units (5 mg) under the skin twice weekly in the morning or before your workout.",
+      // NAD+ moved to Pharmacy L's 200 mg/mL / 5 mL vial (2026-09-25): the SAME
+      // 80 mg dose is 40 units (0.4 mL) instead of 80. 5 mL x 200 mg/mL = the
+      // 1000 mg the old 10 mL / 100 mg/mL vial held, so every tier's supply
+      // (4 weeks per vial, 80 mg three times a week) is unchanged.
+      "NAD+ (Pharmacy L) / vial(s)": {
+        med: "NAD+",
+        conc: "200mg/mL, 5mL vial",
+        rx: "Inject 40 units (80 mg) under the skin 3 times per week.",
       },
-      "NAD+ (Pharmacy L) / 1 vial": {
-        med: "1 NAD+",
-        conc: "100mg/mL, 10mL vial",
-        // Sheet reads "40 units (80 mg)" — a units typo at 100 mg/mL
-        // (80 units = 0.8 mL). See the v5.18.0 header note.
-        rx: "Inject 80 units (80 mg) under the skin 3 times per week.",
-      },
-      "NAD+ (Pharmacy L) / 2 vials": {
-        med: "2 NAD+",
-        conc: "100mg/mL, 10mL vials",
-        rx: "Inject 80 units (80 mg) under the skin 3 times per week.",
-      },
-      "NAD+ (Pharmacy L) / 3 vials": {
-        med: "3 NAD+",
-        conc: "100mg/mL, 10mL vials",
-        rx: "Inject 80 units (80 mg) under the skin 3 times per week.",
-      },
-      "Tesamorelin (Pharmacy L) / 1 vial": {
-        med: "1 Tesamorelin",
+      "Tesamorelin (Pharmacy L) / vial(s)": {
+        med: "Tesamorelin",
         conc: "5mg/mL, 5mL vial",
-        rx: "Inject 20 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
-      },
-      "Tesamorelin (Pharmacy L) / 2 vials": {
-        med: "2 Tesamorelin",
-        conc: "5mg/mL, 5mL vials",
-        rx: "Inject 20 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
-      },
-      "Tesamorelin (Pharmacy L) / 3 vials": {
-        med: "3 Tesamorelin",
-        conc: "5mg/mL, 5mL vials",
         rx: "Inject 20 units (1 mg) under the skin every night at bedtime, Monday through Friday.",
       },
       "Klow Blend (BPC/KPV/GHK/TB)": {
@@ -647,29 +856,83 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         conc: "3mg/3mg/10mg/3mg per mL, 5mL vial",
         rx: "Inject 20 units (0.6 mg BPC-157 / 0.6 mg KPV / 2 mg GHK-Cu / 0.6 mg TB-500) under the skin in the morning, Monday through Friday.",
       },
+      // ---- Pharmacy K Pharma Rx: GLOW + KLOW (2026-09-21) ----------------------
+      // Both labels ride OP2_OTHER_PHARMACY (Pharmacy K is the pharmacy that
+      // already covers DSIP Injection), so the OP2 composer renders the
+      // pharmacy-direct flavor and NEITHER label may ever inherit the Pharmacy A
+      // SHIPPING line.
+      // GLOW is the SAME drug as the Pharmacy A rows above at the SAME
+      // concentration: Pharmacy K's 27mg / 5mg / 10mg per 3mL vial is exactly
+      // 1.66mg / 9mg / 3.33mg per mL, so the clinic's 30 units is the same
+      // 0.5 mg BPC-157 / 2.7 mg GHK-Cu / 1 mg TB-500. The component order
+      // matches the Pharmacy A rows (BPC / GHK / TB) so the concentration list and
+      // the mg split stay aligned; only the vial source differs. The separate
+      // label exists so the team can pick Pharmacy K's vial without the patient
+      // text ever claiming a Pharmacy A tracking text.
+      "Glow Blend (Pharmacy K)": {
+        med: "1 Glow Blend (BPC-157 / GHK-Cu / TB-500)",
+        conc: "1.66mg/9mg/3.33mg per mL, 3mL vial",
+        rx: "Inject 30 units (0.5 mg BPC-157 / 2.7 mg GHK-Cu / 1 mg TB-500) under the skin once daily.",
+      },
+      // KLOW is NOT the Greenwich [GRE] KLOW above (that one is a 5mL vial at
+      // 3/10/3/3 mg per mL). Pharmacy K ships a 10mL vial at 3mg/3mg/3mg/10mg per
+      // mL for BPC-157 / GHK-Cu / TB-500 / KPV, so the clinic's 20 units
+      // (0.2 mL) is 0.6 / 0.6 / 0.6 / 2 mg. Jeyson confirmed 2026-09-21 that
+      // the Pharmacy K sheet's CONCENTRATION column drives the dose — the sheet's
+      // per-vial totals (3/3/3/50 in 10mL) contradict it and are NOT used — and
+      // his real 9/23/26 order block repeats "3mg / 3mg / 3mg / 10mg per mL",
+      // so that call is confirmed against a live order.
+      // SCHEDULE (from that same order): 2 vials of 10mL over 14 weeks, dosed
+      // 5 days on and 2 days off, Mon-Fri — NOT daily. The sentence therefore
+      // says "once daily, Monday through Friday", the house phrasing for
+      // 5-on/2-off (Greenwich KLOW, Epithalon, PT-141).
+      "KLOW (Pharmacy K) / vial(s)": {
+        med: "KLOW (BPC-157 / GHK-Cu / TB-500 / KPV)",
+        conc: "3mg/3mg/3mg/10mg per mL, 10mL vial",
+        rx: "Inject 20 units (0.6 mg BPC-157 / 0.6 mg GHK-Cu / 0.6 mg TB-500 / 2 mg KPV) under the skin once daily, Monday through Friday.",
+      },
+      // Pharmacy K's OWN GHK-Cu (v5.24.0, re-pinned 2026-09-24 to the vial size the
+      // pharmacy actually stocks). NOT the Pharmacy A rows above: 25mg/mL, but
+      // 10 units (0.10 mL = 2.5 mg) 5 days on / 2 days off where Pharmacy A's is
+      // 12 units (1.2 mg) EVERY day — one shared label would ship both the wrong
+      // dose and the wrong schedule. The 2.5 mg/day matches the Pharmacy L rows
+      // (5 units of their 50mg/mL vial), so the clinic's GHK-Cu target is 2.5 mg
+      // and only the vial differs.
+      // v5.23.1: the Rx dispenses 3 x 5mL vials (15 mL), not one 15 mL vial.
+      // v5.24.0: Pharmacy K called in the scripts — they only stock the 2mL vial
+      // (50mg/2mL = 25mg/mL), so all three scripts moved 25 units -> 10 units.
+      // The drug per vial is unchanged (50 mg) and the DOSE IS UNCHANGED
+      // (2.5 mg/injection): 25mg/mL x 0.10 mL = 2.5 mg, and 3 x 2mL = 6 mL is
+      // the same 60 doses of 0.10 mL the 15 mL gave at 0.25 mL. Duration is
+      // unchanged. Only the vial size, concentration and unit count moved.
+      "GHK-Cu (Pharmacy K) / vial(s)": {
+        med: "GHK-Cu",
+        conc: "25mg/mL, 2mL vial",
+        rx: "Inject 10 units (2.5 mg) under the skin once daily, Monday through Friday.",
+      },
       "SS-31": {
         med: "1 SS-31",
         conc: "50mg/mL, 6mL vial",
         rx: "Inject 40 units (20 mg) under the skin in the morning, 2 times per week.",
       },
-      "NAD+ Light / 1 vial": {
-        med: "1 NAD+",
+      "NAD+ Light / vial(s)": {
+        med: "NAD+",
         conc: "100mg/mL, 10mL vial",
         rx: "Inject 50 units (50 mg) under the skin 3 times per week.",
       },
-      "NAD+ Medium / 2 vials": {
-        med: "2 NAD+",
-        conc: "100mg/mL, 10mL vials",
+      "NAD+ Medium / vial(s)": {
+        med: "NAD+",
+        conc: "100mg/mL, 10mL vial",
         rx: "Inject 100 units (100 mg) under the skin 3 times per week.",
       },
-      "NAD+ Strong / 4 vials": {
-        med: "4 NAD+",
-        conc: "100mg/mL, 10mL vials",
+      "NAD+ Strong / vial(s)": {
+        med: "NAD+",
+        conc: "100mg/mL, 10mL vial",
         rx: "Inject 200 units (200 mg) under the skin 3 times per week. This is 2 mL total, so split it into two separate injections at different sites.",
       },
-      "NAD+ Strong / 4 vials (alt. dosing)": {
-        med: "4 NAD+",
-        conc: "100mg/mL, 10mL vials",
+      "NAD+ Strong / vial(s) (alt. dosing)": {
+        med: "NAD+",
+        conc: "100mg/mL, 10mL vial",
         rx: "Inject 85 units (85 mg) under the skin once daily.",
       },
       "PT-141 Injection": {
@@ -677,15 +940,9 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         conc: "2mg/mL, 5mL vial",
         rx: "Inject 20 units (0.4 mg) under the skin once daily, Monday through Friday.",
       },
-      "Thymosin Alpha-1 / 1 vial": {
-        med: "1 Thymosin Alpha-1",
+      "Thymosin Alpha-1 / vial(s)": {
+        med: "Thymosin Alpha-1",
         conc: "5mg/mL, 5mL vial",
-        rx: "Inject 20 units (1 mg) under the skin every day, Monday through Friday.",
-        link: GUIDE_TA1,
-      },
-      "Thymosin Alpha-1 / 3 vials": {
-        med: "3 Thymosin Alpha-1",
-        conc: "5mg/mL, 5mL vials",
         rx: "Inject 20 units (1 mg) under the skin every day, Monday through Friday.",
         link: GUIDE_TA1,
       },
@@ -694,6 +951,18 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         conc: "10mg per kit, reconstituted with 1mL bacteriostatic water",
         rx: "Reconstitute one kit with 1 mL of bacteriostatic water, then inject 50 units (5 mg) under the skin twice weekly in the morning or before your workout.",
         link: GUIDE_TA1,
+      },
+      // ---- Pharmacy C (Pinealon, 2026-09-21) --------------------------------
+      // Template Menu v6.25. Reconstituted 5mL vial at 4mg/mL = 20mg total; the
+      // clinic's 25 units is 1mg, so one vial is exactly 20 injection days
+      // (5mL / 0.25mL), then cycle off. Pharmacy C is a pharmacy-direct supplier
+      // (same as MOTS-c above), so this label rides OP2_OTHER_PHARMACY - it must
+      // NEVER inherit the Pharmacy A SHIPPING line. Default injectable guide (the
+      // vial is already liquid - no reconstitution, so not the MOTS-c link).
+      "Pinealon / vial(s)": {
+        med: "Pinealon",
+        conc: "4mg/mL, 5mL vial",
+        rx: "Inject 25 units (1 mg) under the skin once daily for 20 days, then cycle off.",
       },
       "Epithalon": {
         med: "1 Epithalon",
@@ -821,15 +1090,9 @@ One quick note: we ship peptides a few vials at a time because they have a limit
         pickup: false,
       },
       // Pharmacy L's own NAD nasal spray (300 mg/mL vs the 30 mg/mL above).
-      "NAD Nasal Spray (Pharmacy L) / 1 bottle": {
-        med: "1 NAD Nasal Spray",
+      "NAD Nasal Spray (Pharmacy L) / bottle(s)": {
+        med: "NAD Nasal Spray",
         conc: "300mg/mL, 10mL bottle",
-        rx: "Use 1 spray in each nostril every morning, up to 2 times per day as directed.",
-        pickup: false,
-      },
-      "NAD Nasal Spray (Pharmacy L) / 2 bottles": {
-        med: "2 NAD Nasal Spray",
-        conc: "300mg/mL, 10mL bottles",
         rx: "Use 1 spray in each nostril every morning, up to 2 times per day as directed.",
         pickup: false,
       },
@@ -969,7 +1232,7 @@ One quick note: we ship peptides a few vials at a time because they have a limit
 
     "Supplies / Status / Admin": {
       "Syringes + Supplies": {
-        plain: `Hi {NAME}! This is Dr. Jones's Order Processing Team. We just received the tracking details for your order.
+        plain: `Hi {NAME}! This is Dr. Example's Order Processing Team. We just received the tracking details for your order.
 
 {TRACKING}
 
@@ -991,7 +1254,7 @@ ${HELP}`,
 We just sent you a LabX order just in case you need a redraw or haven't completed your labs yet. Let us know if you have any questions.`,
       },
       "AOD 3-Month Check-In": {
-        plain: `Hi {NAME}, this is Dr. Jones' Medical Team. We are about to order your next set of AOD. We would like to check in how you are doing with AOD or if you wanted to switch to other peptides? Kindly let us know how to proceed. Thank you!`,
+        plain: `Hi {NAME}, this is Dr. Example' Medical Team. We are about to order your next set of AOD. We would like to check in how you are doing with AOD or if you wanted to switch to other peptides? Kindly let us know how to proceed. Thank you!`,
       },
       "PE Booking Link": {
         plain: `Perfect! You need to meet with [PE name], your patient advocate, so she can help you renew your [medication]. To make it easy for you to schedule a call with her, I've included a link below where you can choose a time that fits your schedule best. It does take a bit to load, so please be patient.
@@ -999,7 +1262,7 @@ We just sent you a LabX order just in case you need a redraw or haven't complete
 Here's her/his booking link: https://drdeanjones.com/book`,
       },
       "BHRT Supplements": {
-        plain: `Hi there, this is Heather from Dr. Jones' Medical team. Here are the core BHRT support supplements Dr. Jones recommends to help your body balance and optimize hormone therapy
+        plain: `Hi there, this is Heather from Dr. Example' Medical team. Here are the core BHRT support supplements Dr. Example recommends to help your body balance and optimize hormone therapy
 
 - DIM – 2 capsules daily with meals
 https://securelinks.drdeanjones.com/2p9avaj6
@@ -1011,8 +1274,8 @@ https://securelinks.drdeanjones.com/534n7ey2
 Let us know if you have any questions!`,
       },
       "WL Supplements": {
-        plain: `Hi {NAME}, this is Heather from Dr. Jones' Medical team.
-Here are the core Weight Loss (WL) support supplements Dr. Jones recommends to optimize your results:
+        plain: `Hi {NAME}, this is Heather from Dr. Example' Medical team.
+Here are the core Weight Loss (WL) support supplements Dr. Example recommends to optimize your results:
 
 - Digestive Enzyme – 1–2 caps with each meal
 https://securelinks.drdeanjones.com/vxnn54rs
@@ -1074,6 +1337,7 @@ Let us know if you have any questions!`,
   function buildTrackingMessage(entry, firstName, tracking, carePlan, group, label) {
     const trk = (tracking && tracking.trim()) ? tracking.trim() : '[tracking number]';
     const pharmacyj = !!(label && PHARMACY_J_TRACKING.has(label));
+    const pharmacyl = !!(label && OP2_PHARMACYL.has(label));
 
     if (entry.plain) {
       return entry.plain.split('{NAME}').join(firstName).split('{TRACKING}').join(trk);
@@ -1081,7 +1345,7 @@ Let us know if you have any questions!`,
 
     const parts = [];
     parts.push(HEAD.split('{NAME}').join(firstName).split('{TRACKING}').join(trk));
-    parts.push('\n' + (pharmacyj ? SPLIT_NOTE_PHARMACY_J : SPLIT_NOTE));
+    parts.push('\n' + (pharmacyl ? PHARMACYL_NOTE : (pharmacyj ? SPLIT_NOTE_PHARMACY_J : SPLIT_NOTE)));
     if (entry.pickup) parts.push('\n' + PICKUP);
 
     let block = 'Dosing Instructions\n';
@@ -1119,18 +1383,48 @@ Let us know if you have any questions!`,
     // ---- INJECTABLES (Pharmacy A) -------------------------------------------
     "CJC/Ipamorelin":        { class: "inject", cadence: "twice daily, for a total of 14 units per day. Use in the morning while fasted and again before bed. Use 5 days on and 2 days off.", special: ["blend"] },
     "GHK-Cu":                { class: "inject", cadence: "once daily" },
+    // Pharmacy K's own GHK-Cu (v5.23.0, Template Menu v6.28). Same drug, same
+    // 10mg/mL as the row above, DIFFERENT schedule and dose: Pharmacy K's 25 units
+    // (2.5 mg) runs 5 days on / 2 days off, Pharmacy A's 12 units (1.2 mg) runs
+    // every day. DOSE_RULES is matched by drug NAME, so the two cannot share a
+    // row — and if only "GHK-Cu" existed, the Pharmacy K block would resolve to the
+    // DAILY cadence and the patient text would promise daily dosing for a
+    // 5-on/2-off schedule (the KLOW trap, one product over). The Pharmacy K
+    // Template Menu block therefore writes its Medication line as "3 vials of
+    // 5mL Pharmacy K GHK-Cu"; coreName() strips a trailing "(...)", so a
+    // parenthetical could never have separated them.
+    "Pharmacy K GHK-Cu":        { class: "inject", cadence: "once daily, Monday through Friday" },
     "Glow Blend":            { class: "inject", cadence: "once daily", special: ["blend"] },
     "Wolverine Blend":       { class: "inject", cadence: "once daily", special: ["blend"] },
     "TB-500":                { class: "inject", cadence: "once daily" },
     "BPC-157":               { class: "inject", route: "im_injury", cadence: "once daily at the injury site as directed", special: ["routeOverride"] },
     "Tesamorelin":           { class: "inject", cadence: "every night at bedtime, Monday through Friday" },
     "Tesamorelin / Ipamorelin": { class: "inject", cadence: "every night at bedtime, Monday through Friday", special: ["blend"] },
+    // Pharmacy K's LYOPHILIZED Tesa/Ipamorelin (Template Menu v6.24). The
+    // "Lyophilized" word in the Medication line is what keeps this row separate:
+    // coreName() strips a trailing "(lyophilized)", so the plain spelling would
+    // collapse onto the row above, whose blend mg renders only the FIRST
+    // component. Hand-written sentence on purpose - it carries the reconstitution
+    // step + the full 1 mg / 0.5 mg split, and it is what the patient reads.
+    "Lyophilized Tesamorelin / Ipamorelin": { class: "inject", route: "reconstitute", cadence: "every night at bedtime, Monday through Friday", special: ["reconstitute", "blend"], guide: "https://securelinks.drdeanjones.com/3ak8bksx", sentence: "Reconstitute one vial with 2 mL of bacteriostatic water, then inject 20 units (1 mg Tesamorelin / 0.5 mg Ipamorelin) under the skin every night at bedtime, Monday through Friday." },
     "Klow Blend":            { class: "inject", cadence: "in the morning, Monday through Friday", special: ["blend"] },
+    // Pharmacy K's 10mL KLOW (2026-09-21) — a DIFFERENT vial from the Greenwich
+    // "Klow Blend" row above (3/3/3/10 vs 3/10/3/3 mg per mL), so it needs its
+    // own rule: the names must not collapse onto one another. Cadence follows
+    // the real 9/23/26 order: 5 days on / 2 days off, i.e. Monday through
+    // Friday. NOT "once daily" — the block's "5 days on and 2 days off" phrase
+    // does not match cadenceFromFreq(), so this rule has to carry the wording.
+    "KLOW":                  { class: "inject", cadence: "once daily, Monday through Friday", special: ["blend"] },
     "SS-31":                 { class: "inject", cadence: "in the morning, 2 times per week" },
     "NAD+":                  { class: "inject", cadence: "3 times per week", special: ["splitVolume"] },
     "PT-141":                { class: "inject", cadence: "once daily, Monday through Friday" },
     "Thymosin Alpha-1":      { class: "inject", cadence: "every day, Monday through Friday", guide: "https://securelinks.drdeanjones.com/3ak8bksx" },
     "MOTS-c":       { class: "inject", route: "reconstitute", cadence: "twice weekly in the morning or before your workout", timing: "Reconstitute one kit with 1 mL of bacteriostatic water, then inject", special: ["reconstitute"], guide: "https://securelinks.drdeanjones.com/3ak8bksx" },
+    // Pharmacy C's Pinealon (Template Menu v6.25). No route override: the block's
+    // "subcutaneously" form resolves to subq, and its given mg (1mg) passes
+    // through verbatim, so the sentence reads "25 units (1 mg) ... once daily for
+    // 20 days, then cycle off." — exactly one 5mL / 20mg vial per cycle.
+    "Pinealon":              { class: "inject", cadence: "once daily for 20 days, then cycle off" },
     "Epithalon":             { class: "inject", cadence: "once daily, Monday through Friday" },
     "DSIP":                  { class: "inject", cadence: "once nightly at bedtime, Monday through Friday" },
     "DSIP / BPC-157 / CJC":  { class: "inject", cadence: "once nightly at bedtime, Monday through Friday", special: ["blend"] },
@@ -1161,6 +1455,20 @@ Let us know if you have any questions!`,
     "Tesofensine":           { class: "noninject", route: "oral", cadence: "every morning daily" },
     "Thymosin Alpha-1 (nasal)": { class: "noninject", route: "nasal", cadence: "every morning or early afternoon daily, up to 2 times per day as directed" },
 
+    // ---- Added 2026-09-30 from the harvested Template Menu corpus ------------
+    // Sermorelin / Glutathione / the three RxFlow blends: dosing and cadence
+    // are quoted from the real template blocks in harvest/extract.json.
+    "Sermorelin":              { class: "inject", cadence: "twice daily, 5 days on and 2 days off" },
+    "Glutathione":             { class: "inject", cadence: "twice weekly" },
+    "MOTs-C/Tesa":             { class: "inject", cadence: "once daily, Monday through Friday", special: ["blend"] },
+    "Pinealon/PE22-28/Selank": { class: "inject", cadence: "once daily, Monday through Friday", special: ["blend"] },
+    "Semax/Selank":            { class: "inject", cadence: "every day, Monday through Friday", special: ["blend"] },
+    // LDN: 1.5 mg capsules titrated 1x / 2x / 3x per day over 3 months (180 caps);
+    // refill is 4.5 mg capsules, 1x daily (90 caps). Wording needs Carrie's sign-off.
+    "LDN":                     { class: "noninject", route: "oral", cadence: "once daily", special: ["titration"],
+      sentence: "Take 1 capsule (1.5 mg) every day for the first month, then 2 capsules (3 mg) every day for the second month, then 3 capsules (4.5 mg) every day for the third month.",
+      sentenceRefill: "Take 1 capsule (4.5 mg) every day." },
+
     // ---- GLP-1 (Greenwich) — cadence is computed by the calculator/parser,
     //      no per-drug rule needed beyond class = glp1.
     "Semaglutide":           { class: "glp1" },
@@ -1176,9 +1484,13 @@ Let us know if you have any questions!`,
   // Shared SMS frame constants (engine-local copies — the engine must stay
   // self-contained for the slice harness; keep in sync with the script's
   // HEAD / SPLIT_NOTE / NO_INC / HELP / GUIDE / STORE_FRIDGE).
-  const RXSMS_HEAD = "Hi {NAME}! This is Dr. Jones's Order Processing Team. We just received the tracking details for your order.\n{TRACKING}";
+  const RXSMS_HEAD = "Hi {NAME}! This is Dr. Example's Order Processing Team. We just received the tracking details for your order.\n{TRACKING}";
   const RXSMS_SPLIT_NOTE = "Tracking may take 2-3 business days to update after the label is created. If your order includes medications from different pharmacies, you'll receive separate tracking messages from each pharmacy, which may come from different phone numbers.";
   const RXSMS_SPLIT_NOTE_PHARMACY_J = "Please allow up to 10 days for your order to arrive. If your order includes medications from different pharmacies, you'll receive separate tracking messages from each pharmacy, which may come from different phone numbers.";
+  // Pharmacy L 4-day arrival note (v5.25.0) — engine-local copy, same reason as
+  // the rest: the slice harness evaluates this block standalone. Keep in sync
+  // with PHARMACYL_NOTE above.
+  const RXSMS_PHARMACYL_NOTE = "Please allow up to 4 days for your order to arrive. If your order includes medications from different pharmacies, you'll receive separate tracking messages from each pharmacy, which may come from different phone numbers.";
   const RXSMS_NO_INC = 'Please do not increase your dose unless instructed by our Medical Team.';
   const RXSMS_HELP = 'Questions about shipping or delivery? Just reply to this message.';
   const RXSMS_FRIDGE = 'Store your troches in the fridge (2-8°C) in the original container, away from heat and moisture. Keep the lid tightly closed and use clean, dry hands when taking one out.';
@@ -1216,12 +1528,23 @@ Let us know if you have any questions!`,
     let s = String(medRaw || '').trim();
     s = s.replace(/\s*=\s*[^=]*\btotal\b\s*$/i, ''); // calculator "= 8mg total"
     // Leading quantity — "30 Tesofensine", "1 vial of 6mL X", "1x5mL X" — but
-    // NOT drug-name digits ("5-Amino-1MQ", "11-Keto"): require a space + letter
-    // (or the "xN mL" form) after the number.
-    s = s.replace(/^\d+(?:\.\d+)?(?:\s+(?=[A-Za-z(])|x\s*\d+(?:\.\d+)?\s*(?:mL|ml|cc)\s+)/i, '');
-    // Container phrase: "vial of 6mL ", "kits of ", "bottles of "
-    s = s.replace(/^(?:vials?|bottles?|kits?|pills?|capsules?|troches?|tablets?)\s+(?:of\s+)?/i, '');
+    // NOT drug-name digits ("5-Amino-1MQ", "11-Keto"): require a space + a letter or
+    // digit (or the "xN mL" / "1x Name" form) after the number. The count can also sit
+    // in front of a digit-initial name ("30 5-Amino-1MQ"), so digits are allowed in the
+    // lookahead — guarded so a unit or container word is never eaten instead.
+    s = s.replace(/^\d+(?:\.\d+)?(?:\s+(?!(?:mg|mcg|g|ml|mL|cc|iu|units?|vials?|bottles?|kits?|pills?|capsules?|caps|troches?|tablets?)\b)(?=[A-Za-z0-9(])|x\s*\d+(?:\.\d+)?\s*(?:mL|ml|cc)\s+|x\s*(?=[A-Za-z(]))/i, '');
+    // "1x30 caps BPC-157 Capsules" — count x count, the container word goes below.
+    s = s.replace(/^\d+x\d*\s+(?=[A-Za-z(])/i, '');
+    // Container phrase: "1 vial of 6mL ", "kits of ", "bottles of ", "caps "
+    s = s.replace(/^(?:\d+(?:\.\d+)?\s+)?(?:vials?|bottles?|kits?|pills?|capsules?|caps|troches?|tablets?)\s+(?:of\s+)?/i, '');
     s = s.replace(/^\d+(?:\.\d+)?\s*(?:mL|ml|cc)\s+/i, '');
+    // "2 vials of 5mL of Tesa 2mg/mL" leaves a dangling "of" after the two strips above.
+    s = s.replace(/^of\s+/i, '');
+    // Multi-dose quantity phrase: "100mcg and 200mcg pills of SLU-PP-332",
+    // "50mg capsules of O-304". The whole prefix is not the drug name — cutting at
+    // the first unit below would leave "100mcg and" and coreName would reduce it to "and".
+    // Requires a container + "of", so a name containing "and" is never touched.
+    s = s.replace(/^(?:\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|cc|iu|units?)\s*(?:and\s+)?)+\s*(?:vials?|bottles?|kits?|pills?|capsules?|troches?|tablets?)\s+of\s+/i, '');
     const m = s.match(/^(.*?)\s+([\d,]+(?:\.\d+)?\s*(?:mg|mcg|mg\/mL|mg\/ml|IU|units?)\b[\s\S]*)$/i);
     return (m && m[1].trim()) ? m[1].trim() : s;
   }
@@ -1383,6 +1706,16 @@ Let us know if you have any questions!`,
     'cb4211': 'mots-c',
     'pregnyl hcg': 'pregnyl (hcg) 10,000',
     'pregnyl (hcg)': 'pregnyl (hcg) 10,000',
+    'pregnyl': 'pregnyl (hcg) 10,000',
+    'cjc-1295/ipamorelin': 'cjc/ipamorelin',
+    'nad': 'nad+',
+    'tesa': 'tesamorelin',
+    'tesa/ipamorelin': 'tesamorelin/ipamorelin',
+    'dsip/bpc/cjc': 'dsip/bpc-157/cjc',
+    'glow': 'glow blend',
+    'bpc/ghk/tb': 'glow blend',
+    'thymosin a-1': 'thymosin alpha-1',
+    '5-amino 1mq': '5-amino-1mq',
   };
 
   function matchRule(core, form) {
@@ -1487,6 +1820,13 @@ Let us know if you have any questions!`,
     const doseMatch = text.match(/^\s*Dosing:\s*([\s\S]*?)(?=^\s*(?:Frequency|Estimated Duration|Directions|Medication|Products Ordered|Order\s*#)\s*:|(?![\s\S]))/mi);
     const doseRaw = doseMatch ? doseMatch[1].trim() : '';
     const pharmacy = (text.match(/\b(Pharmacy J|Pharmacy A|Greenwich)\b/i) || [null, ''])[1];
+    // Pharmacy L partner blocks ([BLRX] = Blue Five Labs / Greenstone Rx) never
+    // name a pharmacy the classify regex above matches, so the marker is sniffed
+    // here for the ARRIVAL NOTE ONLY — kind classification stays untouched.
+    const pharmacylBlock = /\[BLRX\]|pharmacyl/i.test(text);
+    // One arrival note for both the no-rule (Blank Skeleton) branch and the
+    // rendered frame: Pharmacy L 4-day, else Pharmacy J 10-day, else the generic note.
+    const arrivalNote = pharmacylBlock ? RXSMS_PHARMACYL_NOTE : (/pharmacyj/i.test(pharmacy) ? RXSMS_SPLIT_NOTE_PHARMACY_J : RXSMS_SPLIT_NOTE);
     const multiMed = (text.match(/^\s*Medication:\s*/gmi) || []).length > 1;
     const reorder = text.match(/^\s*\*\s*we will order another\s+(.+?)\s+in\s+(\d+)\s+weeks?\s*$/mi);
 
@@ -1533,7 +1873,7 @@ Let us know if you have any questions!`,
         detected: kind === 'inject' ? 'Injectable peptide' : kind === 'noninject' ? 'Non-injectable' : 'Unknown format',
         msg: [
           RXSMS_HEAD,
-          '\n' + RXSMS_SPLIT_NOTE,
+          '\n' + arrivalNote,
           '\n\nDosing Instructions\nMedication: [qty] [medication]\n[full dosing instruction, mg in parentheses behind the unit count]',
           '\n' + RXSMS_NO_INC,
           '\n' + RXSMS_HELP,
@@ -1641,10 +1981,9 @@ Let us know if you have any questions!`,
 
     // --- full tracking + dosing SMS frame -----------------------------------
     const medLabel = medicationLabel(medRaw, concRaw);
-    const splitNote = /pharmacyj/i.test(pharmacy) ? RXSMS_SPLIT_NOTE_PHARMACY_J : RXSMS_SPLIT_NOTE;
     const parts = [];
     parts.push(RXSMS_HEAD);
-    parts.push('\n' + splitNote);
+    parts.push('\n' + arrivalNote);
     parts.push('\n\nDosing Instructions\nMedication: ' + medLabel + '\n' + sentence);
     if (specials.indexOf('fridge') >= 0) parts.push('\n\n' + RXSMS_FRIDGE);
     parts.push('\n' + RXSMS_NO_INC);
@@ -1798,16 +2137,18 @@ Let us know if you have any questions!`,
     // --- sanity notes -------------------------------------------------------
     const freq = grab(/^\s*Frequency:\s*(.+)$/mi);
     if (freq && !/weekly/i.test(freq)) warn.push('Frequency says "' + freq + '" but the message says weekly');
+    // Pharmacy L partner block ([BLRX] / "Pharmacy L") -> 4-day arrival note.
+    const arrivalNote = PHARMACYL_RE.test(raw) ? PHARMACYL_NOTE : SPLIT_NOTE;
     const dur = grab(/^\s*Estimated Duration:\s*(.+)$/mi);
     if (dur) info.push('calculator estimated ' + dur + ' of supply, not shown to the patient');
     if (parsedMed && parsedMed.vials > 1) info.push(parsedMed.vials + ' vials in this order');
     info.push('tracking from ' + trackingSource);
 
     const msg =
-`Hi ${firstName}! This is Dr. Jones's Order Processing Team. We just received the tracking details for your order.
+`Hi ${firstName}! This is Dr. Example's Order Processing Team. We just received the tracking details for your order.
 ${tracking}
 
-${SPLIT_NOTE}
+${arrivalNote}
 
 Medication: ${medLine}
 ${doseBlock}
@@ -1879,7 +2220,7 @@ ${HELP}`;
       ? 'the next'
       : 'the next ' + cfg.nextVials + ' ' + (cfg.nextVials === 1 ? 'vial' : 'vials');
 
-    return `Hi ${firstName}, this is Dr. Jones' Order Processing Department with a quick update.
+    return `Hi ${firstName}, this is Dr. Example' Order Processing Department with a quick update.
 
 Your ${cfg.med} order just went over to our compounding pharmacy. Once the peptides are compounded, we'll send you the tracking number.
 
@@ -1910,6 +2251,7 @@ We'll always check in before any future shipment goes out, just to confirm the t
       "PT-141",
       "Thymosin Alpha-1",
       "MOTS-c",
+      "Pinealon",
       "Epithalon",
       "DSIP",
       "DSIP / BPC / CJC Blend",
@@ -1954,7 +2296,7 @@ We'll always check in before any future shipment goes out, just to confirm the t
   function buildOrderPlacedMessage(firstName, items) {
     const allPharmacyJ = items.length > 0 && items.every(function (n) { return PHARMACY_J_ORDER_ITEMS.has(n); });
     const para = allPharmacyJ ? ORDER_PLACED_PHARMACY_J : FULFILLMENT.orderPlaced[fulfillmentMode()];
-    return `Hi ${firstName}! This is Dr. Jones' Order Processing Team. Your ${formatOrderList(items)} order has been placed and is currently being processed.
+    return `Hi ${firstName}! This is Dr. Example' Order Processing Team. Your ${formatOrderList(items)} order has been placed and is currently being processed.
 
 ${para}
 
@@ -1962,7 +2304,7 @@ Thank you!`;
   }
 
   function buildStillProcessingMessage(firstName, items) {
-    return `Hi ${firstName}! This is Dr. Jones' Order Processing Team. Your ${formatOrderList(items)} order is still processing in the pharmacy. ${FULFILLMENT.stillProcessing[fulfillmentMode()]} We're keeping a close eye on it and will send your tracking info as soon as it's ready.`;
+    return `Hi ${firstName}! This is Dr. Example' Order Processing Team. Your ${formatOrderList(items)} order is still processing in the pharmacy. ${FULFILLMENT.stillProcessing[fulfillmentMode()]} We're keeping a close eye on it and will send your tracking info as soon as it's ready.`;
   }
 
   // ---- TAB: ORDER PLACED 2.0 (2026-08-26) ----------------------------------
@@ -1992,11 +2334,23 @@ Thank you!`;
   // peptides are out of scope — they don't use these templates.)
   const OP2_OTHER_PHARMACY = new Set([
     'MOTS-c / 8 kits',
+    // Pharmacy C — added 2026-09-21 (same pharmacy as MOTS-c)
+    'Pinealon / vial(s)',
     'SS-31',
     'DSIP Injection',
     'DSIP Troches',
     // Pharmacy B — added 2026-09-08 (same pharmacy as SS-31)
     'CJC-1295 / Ipamorelin Troche',
+    // Pharmacy K Pharma Rx — added 2026-09-21 (same pharmacy as DSIP Injection)
+    'Tesamorelin / Ipamorelin (Pharmacy K) / vial(s)',
+    // Pharmacy K's GLOW + KLOW (2026-09-21). GLOW is the same drug as the Pharmacy A
+    // rows but ships from Pharmacy K; KLOW is Pharmacy K's own 10mL vial. Both are
+    // pharmacy-direct -> never a Pharmacy A tracking promise.
+    'Glow Blend (Pharmacy K)',
+    'KLOW (Pharmacy K) / vial(s)',
+    // Pharmacy K GHK-Cu (2026-09-23) — pharmacy-direct like the rest of the
+    // Pharmacy K line, so it can never promise a Pharmacy A tracking text either.
+    'GHK-Cu (Pharmacy K) / vial(s)',
   ]);
 
   // pharmacyj | pharmacyl | other | pharmacya. 'other' = known non-Pharmacy A,
@@ -2016,9 +2370,10 @@ Thank you!`;
   // footer. Any order containing a Pharmacy A med uses the Pharmacy A flavor
   // (Pharmacy A templating is the basis for mixed orders).
   // Pharmacy L (2026-09-11) reuses the Pharmacy A body verbatim — only its SHIPPING
-  // line differs — so both flavors point at ONE object (no copy to drift).
+  // line and (2026-09-25) its 4-day fulfillment line differ — so the two flavors
+  // are built from ONE base object (no copy to drift).
   const OP2_PHARMACYA_STYLE = {
-    head: "Hi {NAME}! This is Dr. Jones' Order Processing Team. Your order has been placed!",
+    head: "Hi {NAME}! This is Dr. Example' Order Processing Team. Your order has been placed!",
     fulfillment: "Processing may take up to 10 days due to additional quality testing and high order volume. If you don't receive tracking by day 7, reply here.",
     dosingHeader: 'DOSING:',
     guideSingle: 'Guide:',
@@ -2028,9 +2383,12 @@ Thank you!`;
     glueDosing: true,  // DOSING: sits flush against the first leg
     footer: ['Do not increase your dose unless instructed by our Medical Team. Questions? Reply here.'],
   };
+  // Pharmacy L: identical body, 4-day timeline. Renders ONLY when every
+  // Pharmacy A-style leg in the order is Pharmacy L (see op2ComposeMessage).
+  const OP2_PHARMACYL_STYLE = Object.assign({}, OP2_PHARMACYA_STYLE, { fulfillment: PHARMACYL_FULFILLMENT });
   const OP2_FLAVOR = {
     generic: {
-      head: "Hi {NAME}! This is Dr. Jones's Order Processing Team. Your order is in and we've placed it. Here are your dosing instructions so you're ready to go.",
+      head: "Hi {NAME}! This is Dr. Example's Order Processing Team. Your order is in and we've placed it. Here are your dosing instructions so you're ready to go.",
       fulfillment: null, // resolved at compose: allPharmacyJ ? ORDER_PLACED_PHARMACY_J : FULFILLMENT.orderPlaced[mode]
       dosingHeader: 'Dosing Instructions',
       guideSingle: 'Full guide:',
@@ -2038,7 +2396,7 @@ Thank you!`;
       footer: [NO_INC, HELP],
     },
     pharmacya: OP2_PHARMACYA_STYLE,
-    pharmacyl: OP2_PHARMACYA_STYLE,
+    pharmacyl: OP2_PHARMACYL_STYLE,
     // Pharmacy-direct orders: Pharmacy J AND every other non-Pharmacy A pharmacy
     // (Pharmacy C, Pharmacy B, Pharmacy K, Pharmacy D...). Same short opener as
     // Pharmacy A, but the pharmacy ships/texts everything itself: no SHIPPING
@@ -2046,7 +2404,7 @@ Thank you!`;
     // own line, and a footer that points shipping questions back to us. The
     // copy names no pharmacy, so it is safe for every one of them.
     direct: {
-      head: "Hi {NAME}! This is Dr. Jones' Order Processing Team. Your order has been placed!",
+      head: "Hi {NAME}! This is Dr. Example' Order Processing Team. Your order has been placed!",
       fulfillment: 'Please allow up to 10 days for pharmacy processing and delivery. Shipping, tracking, and dosing updates will come directly from the pharmacy via text/email.',
       dosingHeader: 'DOSING:',
       guideSingle: 'Full Guide:',
@@ -2063,18 +2421,36 @@ Thank you!`;
   const OP2_MAP = {
     // ---- Injectables
     'CJC/Ipamorelin': [['Injectables', 'CJC/Ipamorelin']],
-    'Tesamorelin': [['Injectables', 'Tesamorelin / 2 vials'], ['Injectables', 'Tesamorelin / 4 vials']],
+    'Tesamorelin': [['Injectables', 'Tesamorelin / vial(s)']],
     'Tesamorelin / Ipamorelin Blend': [['Injectables', 'Tesamorelin / Ipamorelin Blend']],
-    'BPC-157': [['Injectables', 'BPC-157 Injection / 1 vial']],
-    'GHK-Cu': [['Injectables', 'GHK-Cu Injection / 1 vial'], ['Injectables', 'GHK-Cu Injection / 2 vials']],
-    'TB-500': [['Injectables', 'TB-500 / 3 vials']],
-    'NAD+': [['Injectables', 'NAD+ Light / 1 vial'], ['Injectables', 'NAD+ Medium / 2 vials'], ['Injectables', 'NAD+ Strong / 4 vials'], ['Injectables', 'NAD+ Strong / 4 vials (alt. dosing)']],
-    'Wolverine Blend': [['Injectables', 'Wolverine Light / 2 vials'], ['Injectables', 'Wolverine Standard / 3 vials'], ['Injectables', 'Wolverine Strong / 6 vials']],
+    'BPC-157': [['Injectables', 'BPC-157 Injection / vial(s)']],
+    'GHK-Cu': [['Injectables', 'GHK-Cu Injection / vial(s)']],
+    'TB-500': [['Injectables', 'TB-500 / vial(s)']],
+    'NAD+': [['Injectables', 'NAD+ Light / vial(s)'], ['Injectables', 'NAD+ Medium / vial(s)'], ['Injectables', 'NAD+ Strong / vial(s)'], ['Injectables', 'NAD+ Strong / vial(s) (alt. dosing)']],
+    'Wolverine Blend': [['Injectables', 'Wolverine Light / vial(s)'], ['Injectables', 'Wolverine Standard / vial(s)'], ['Injectables', 'Wolverine Strong / vial(s)']],
+    // Glow Blend had NO OP2_MAP entry at all, so its chip composed the
+    // "Not found in TRACKING table" placeholder (fixed 2026-09-21). Pharmacy A's
+    // two tiers stay this chip's variants; Pharmacy K's vial is its own badged chip
+    // below so it can never inherit the Pharmacy A split-shipment picker.
+    'Glow Blend': [['Injectables', 'Glow Blend / vial(s)'], ['Injectables', 'Glow Blend / vial(s) (Strong)']],
     'Klow Blend': [['Injectables', 'Klow Blend (BPC/KPV/GHK/TB)']],
+    // Pharmacy K-only chips (badged group below): one hop straight to Pharmacy K's own
+    // vial, no variant picker and no split picker. The KLOW label carries its
+    // real 2-vial / 14-week tier.
+    'Glow Blend (Pharmacy K)': [['Injectables', 'Glow Blend (Pharmacy K)']],
+    'KLOW (Pharmacy K)': [['Injectables', 'KLOW (Pharmacy K) / vial(s)']],
+    // Pharmacy K's own GHK-Cu (v5.23.0) — its own label, its own concentration and
+    // its own 5-on/2-off schedule; never the Pharmacy A "GHK-Cu" tiers above.
+    'GHK-Cu (Pharmacy K)': [['Injectables', 'GHK-Cu (Pharmacy K) / vial(s)']],
+    // Pharmacy K's LYOPHILIZED Tesa/Ipamorelin (v5.28.0) — moved here from the
+    // "Tesamorelin / Ipamorelin Blend" picker so the Pharmacy A blend chip asks no
+    // question and Pharmacy K's own vial is badged like the rest of its line.
+    'Tesamorelin / Ipamorelin (Pharmacy K)': [['Injectables', 'Tesamorelin / Ipamorelin (Pharmacy K) / vial(s)']],
     'SS-31': [['Injectables', 'SS-31']],
     'PT-141': [['Injectables', 'PT-141 Injection']],
-    'Thymosin Alpha-1': [['Injectables', 'Thymosin Alpha-1 / 1 vial'], ['Injectables', 'Thymosin Alpha-1 / 3 vials']],
+    'Thymosin Alpha-1': [['Injectables', 'Thymosin Alpha-1 / vial(s)']],
     'MOTS-c': [['Injectables', 'MOTS-c / 8 kits']],
+    'Pinealon': [['Injectables', 'Pinealon / vial(s)']],
     'Epithalon': [['Injectables', 'Epithalon']],
     'DSIP': [['Injectables', 'DSIP Injection']],
     'DSIP / BPC / CJC Blend': [['Injectables', 'DSIP / BPC / CJC Blend']],
@@ -2084,16 +2460,15 @@ Thank you!`;
     'Pregnyl (HCG)': [['Injectables', 'Pregnyl (HCG) / TRT'], ['Injectables', 'Pregnyl (HCG) / Fertility or PCT']],
     // ---- Pharmacy L duplicates (same drug as above, Pharmacy L's own vials) -----
     // Chips are rendered from this map under an OP2-only "Pharmacy L" group.
-    'Tesamorelin (Pharmacy L)': [['Injectables', 'Tesamorelin (Pharmacy L) / 1 vial'], ['Injectables', 'Tesamorelin (Pharmacy L) / 2 vials'], ['Injectables', 'Tesamorelin (Pharmacy L) / 3 vials']],
-    'BPC-157 (Pharmacy L)': [['Injectables', 'BPC-157 Injection (Pharmacy L) / 1 vial'], ['Injectables', 'BPC-157 Injection (Pharmacy L) / 2 vials'], ['Injectables', 'BPC-157 Injection (Pharmacy L) / 3 vials']],
-    'TB-500 (Pharmacy L)': [['Injectables', 'TB-500 (Pharmacy L) / 1 vial'], ['Injectables', 'TB-500 (Pharmacy L) / 2 vials']],
-    'GHK-Cu (Pharmacy L)': [['Injectables', 'GHK-Cu Injection (Pharmacy L) / 1 vial'], ['Injectables', 'GHK-Cu Injection (Pharmacy L) / 2 vials'], ['Injectables', 'GHK-Cu Injection (Pharmacy L) / 3 vials']],
-    'MOTS-C (Pharmacy L)': [['Injectables', 'MOTS-C (Pharmacy L) / 1 vial'], ['Injectables', 'MOTS-C (Pharmacy L) / 2 vials']],
-    // Same drug, Pharmacy L's 10 mg/mL vials (v5.19.0): a separate chip because the
-    // concentration changes the units (50 units = 5 mg, not 25).
-    'MOTS-C 10mg/mL (Pharmacy L)': [['Injectables', 'MOTS-C 10mg/mL (Pharmacy L) / 2 vials'], ['Injectables', 'MOTS-C 10mg/mL (Pharmacy L) / 4 vials']],
-    'NAD+ (Pharmacy L)': [['Injectables', 'NAD+ (Pharmacy L) / 1 vial'], ['Injectables', 'NAD+ (Pharmacy L) / 2 vials'], ['Injectables', 'NAD+ (Pharmacy L) / 3 vials']],
-    'NAD Nasal Spray (Pharmacy L)': [['Oral / Topical / Nasal', 'NAD Nasal Spray (Pharmacy L) / 1 bottle'], ['Oral / Topical / Nasal', 'NAD Nasal Spray (Pharmacy L) / 2 bottles']],
+    'Tesamorelin (Pharmacy L)': [['Injectables', 'Tesamorelin (Pharmacy L) / vial(s)']],
+    'BPC-157 (Pharmacy L)': [['Injectables', 'BPC-157 Injection (Pharmacy L) / vial(s)']],
+    'TB-500 (Pharmacy L)': [['Injectables', 'TB-500 (Pharmacy L) / vial(s)']],
+    'GHK-Cu (Pharmacy L)': [['Injectables', 'GHK-Cu Injection (Pharmacy L) / vial(s)']],
+    // MOTS-C (2026-09-25): Pharmacy L discontinued the 20 mg/mL sheet option, so
+    // ONE chip now covers the surviving 10 mg/mL vial (50 units = 5 mg).
+    'MOTS-C (Pharmacy L)': [['Injectables', 'MOTS-C (Pharmacy L) / vial(s)']],
+    'NAD+ (Pharmacy L)': [['Injectables', 'NAD+ (Pharmacy L) / vial(s)']],
+    'NAD Nasal Spray (Pharmacy L)': [['Oral / Topical / Nasal', 'NAD Nasal Spray (Pharmacy L) / bottle(s)']],
     // ---- Oral / Topical / Nasal
     'SLU-PP-332': [['Oral / Topical / Nasal', 'SLU-PP-332 (new patient titration)'], ['Oral / Topical / Nasal', 'SLU-PP-332 200mcg (maintenance)']],
     'AOD-9604': [['Oral / Topical / Nasal', 'AOD-9604 Troche']],
@@ -2135,9 +2510,24 @@ Thank you!`;
     ['TB-500 (Pharmacy L)', 'TB-500'],
     ['GHK-Cu (Pharmacy L)', 'GHK-Cu'],
     ['MOTS-C (Pharmacy L)', 'MOTS-C'],
-    ['MOTS-C 10mg/mL (Pharmacy L)', 'MOTS-C 10mg/mL'],
     ['NAD+ (Pharmacy L)', 'NAD+'],
     ['NAD Nasal Spray (Pharmacy L)', 'NAD Nasal Spray'],
+  ];
+
+  // OP2-only "Pharmacy K" chip group (2026-09-21): the same badging idea as
+  // Pharmacy L — Pharmacy K ships pharmacy-direct, so its copies must never be read as
+  // the Pharmacy A rows above. [chip label, shown name]. Every chip's label MUST
+  // have an OP2_MAP entry.
+  const OP2_PHARMACYK_CHIPS = [
+    ['Glow Blend (Pharmacy K)', 'Glow Blend'],
+    ['KLOW (Pharmacy K)', 'KLOW'],
+    // Pharmacy K's own GHK-Cu (v5.23.0) sits next to the Pharmacy A "GHK-Cu" chip on
+    // purpose: same drug, twice the units, 5-on/2-off instead of daily.
+    ['GHK-Cu (Pharmacy K)', 'GHK-Cu'],
+    // Pharmacy K's lyophilized Tesa/Ipamorelin (v5.28.0) — pulled out of the
+    // Pharmacy A blend's variant picker (Jeyson) so Pharmacy K's vial is badged with
+    // the rest of its line instead of hiding behind a question.
+    ['Tesamorelin / Ipamorelin (Pharmacy K)', 'Tesamorelin / Ipamorelin'],
   ];
 
   // Compact stack bodies for the BARE flavors (Pharmacy A / Pharmacy J). The legacy
@@ -2179,6 +2569,8 @@ Thank you!`;
     // Pharmacy L tiers (1/2/3 vials) ship whole — never inherit Pharmacy A's
     // Tesamorelin/BPC-157 split-shipment configs (2026-09-11).
     if (c.indexOf('pharmacyl') >= 0) return null;
+    // Same for Pharmacy K (2026-09-21): its GLOW/KLOW tiers carry no split config.
+    if (c.indexOf('pharmacyk') >= 0) return null;
     if (c.indexOf('wolverine') >= 0) return 'Wolverine Blend (BPC/TB500)';
     if (c.indexOf('glow') >= 0) return 'Glow Blend (BPC/GHK/TB)';
     if (c.indexOf('cjc') >= 0 && c.indexOf('troche') < 0) return 'CJC/IPA';
@@ -2392,12 +2784,20 @@ Thank you!`;
       const ph = s.leg.pharmacy || (s.leg.pharmacyj ? 'pharmacyj' : 'pharmacya');
       return ph === 'pharmacya' || ph === 'pharmacyl';
     });
+    const anyPharmacyA = selected.some(function (s) {
+      const ph = s.leg.pharmacy || (s.leg.pharmacyj ? 'pharmacyj' : 'pharmacya');
+      return ph === 'pharmacya';
+    });
     const allPharmacyJ = selected.length > 0 && selected.every(function (s) { return s.leg.pharmacyj; });
-    // Pharmacy A/Pharmacy L (same body, different SHIPPING line) win mixed orders;
-    // every other pharmacy (Pharmacy J, Pharmacy C, Pharmacy B, Pharmacy K, Pharmacy D...)
-    // renders the pharmacy-direct flavor. generic remains only as the
-    // empty-selection fallback.
-    const flavor = anyPharmacyAStyle ? OP2_FLAVOR.pharmacya : (selected.length ? OP2_FLAVOR.direct : OP2_FLAVOR.generic);
+    // Pharmacy A/Pharmacy L (same body, different timeline + SHIPPING line) win mixed
+    // orders; every other pharmacy (Pharmacy J, Pharmacy C, Pharmacy B, Pharmacy K,
+    // Pharmacy D...) renders the pharmacy-direct flavor. Pharmacy L gets its 4-day
+    // line ONLY on a Pharmacy L-only order — a mixed Pharmacy A+Pharmacy L order keeps
+    // Pharmacy A's 10-day line, because 4 days is not true for a Pharmacy A vial.
+    // generic remains only as the empty-selection fallback.
+    const flavor = anyPharmacyA ? OP2_FLAVOR.pharmacya
+      : anyPharmacyAStyle ? OP2_FLAVOR.pharmacyl
+      : (selected.length ? OP2_FLAVOR.direct : OP2_FLAVOR.generic);
     const para = flavor.fulfillment || (allPharmacyJ ? ORDER_PLACED_PHARMACY_J : FULFILLMENT.orderPlaced[fulfillmentMode()]);
     const parts = [flavor.head.split('{NAME}').join(firstName), para];
     const ship = op2ShippingBlock(selected);
@@ -2471,7 +2871,7 @@ Thank you!`;
       const steps = op2Glp1Steps(raw);
       const dParts = String(parsed.dosing || '').split('\n');
       const dosePart = (dParts.length > 1 ? dParts.slice(1).join('\n') : parsed.dosing) || '';
-      const pharmacyl = /\[BLRX\]|pharmacyl/i.test(raw);
+      const pharmacyl = PHARMACYL_RE.test(raw);
       const leg = {
         label: (pm && pm.drug) ? pm.drug : name, medLine: '', dosing: parsed.dosing || parsed.msg || '[dosing instructions]',
         note: null, guide: parsed.guide || GUIDE, pharmacyj: false,
@@ -2678,6 +3078,8 @@ Thank you!`;
   .pt-chip.pt-on .pt-chip-pharmacyj-tag { color: #ffe9c9; }
   .pt-chip-pharmacyl-tag { font-size: 9px; color: #1d4ed8; font-weight: 600; margin-left: 2px; }
   .pt-chip-op2.pt-on .pt-chip-pharmacyl-tag { color: #dbeafe; }
+  .pt-chip-pharmacyk-tag { font-size: 9px; color: #0f766e; font-weight: 600; margin-left: 2px; }
+  .pt-chip-op2.pt-on .pt-chip-pharmacyk-tag { color: #ccfbf1; }
   .pt-placed-list, .pt-still-list {
     font-size: 13px; font-weight: 600; color: #2d7ff9;
     min-height: 18px; margin-bottom: 8px; line-height: 1.4;
@@ -2809,15 +3211,24 @@ Thank you!`;
       '</div>';
 
     html += '<div class="pt-tabs">' +
-      '<div class="pt-tab pt-active" data-pane="unified">Unified Parser</div>' +
+      '<div class="pt-tab pt-active" data-pane="ldn">LDN</div>' +
       '<div class="pt-tab pt-tab-op2" data-pane="op2">Order Placed 2.0</div>' +
       '<div class="pt-tab" data-pane="placed">Order Placed</div>' +
       '<div class="pt-tab" data-pane="still">Still Processing</div>' +
       '<div class="pt-tab" data-pane="tracking">Tracking &amp; Dosing</div>' +
-      '<div class="pt-tab" data-pane="glp1">GLP-1 Parser</div>' +
+      '<div class="pt-tab" data-pane="glp1" style="display:none;">GLP-1 Parser</div>' +
       '<div class="pt-tab" data-pane="reorder">Reorder</div>' +
       '<div class="pt-tab" data-pane="split">Split Shipment</div>' +
+      '<div class="pt-tab" data-pane="unified" style="display:none;">Unified Parser</div>' +
       '</div><div class="pt-body">';
+
+    // LDN pane (leftmost, default) — three static click-to-copy templates.
+    html += '<div class="pt-pane pt-active" data-pane="ldn">';
+    html += '<div class="pt-group"><div class="pt-group-title">Refill templates</div>';
+    for (const label of Object.keys(LDN_TEMPLATES)) {
+      html += '<div class="pt-item" data-kind="ldn" data-var="' + esc(label) + '">' + esc(label) + '</div>';
+    }
+    html += '</div></div>';
 
     // Order Placed pane (multi-select accumulator)
     html += '<div class="pt-pane" data-pane="placed">' +
@@ -2872,6 +3283,13 @@ Thank you!`;
           esc(c[1]) + ' <span class="pt-chip-pharmacyl-tag">Pharmacy L</span></span>';
       }).join('') +
       '</div>';
+    // Pharmacy K duplicates (2026-09-21) — OP2-only chips, badged the same way.
+    html += '<div class="pt-group"><div class="pt-group-title">Pharmacy K</div>' +
+      OP2_PHARMACYK_CHIPS.map(function (c) {
+        return '<span class="pt-chip-op2" data-op2="' + esc(c[0]) + '" data-name="' + esc(c[0]) + '">' +
+          esc(c[1]) + ' <span class="pt-chip-pharmacyk-tag">Pharmacy K</span></span>';
+      }).join('') +
+      '</div>';
     html += '</div>';
 
     // Still Processing pane (multi-select, mirrors Order Placed)
@@ -2923,8 +3341,8 @@ Thank you!`;
     }
     html += '</div>';
 
-    // GLP-1 parser pane
-    html += '<div class="pt-pane" data-pane="glp1">' +
+    // GLP-1 parser pane (HIDDEN v5.27.0 — kept for the OP2 GLP-1 popup)
+    html += '<div class="pt-pane" data-pane="glp1" style="display:none;">' +
       '<div class="pt-group-title">Paste order block</div>' +
       '<textarea class="pt-glp1-input" placeholder="Paste the GLP-1 Dosing Calculator order block straight in. Tracking comes from the field above." ' +
       'style="width:100%;box-sizing:border-box;min-height:200px;padding:8px;font-size:12px;' +
@@ -2936,10 +3354,11 @@ Thank you!`;
       'Parse &amp; Copy</button>' +
       '</div>';
 
-    // ---- TAB 6: UNIFIED PARSER --------------------------------------------
+    // ---- UNIFIED PARSER (HIDDEN v5.27.0) ----------------------------------
     // Any order block (GLP-1 calculator / Template Menu / manual text) →
     // auto-detect → existing parseGLP1 for GLP-1, else the shared engine.
-    html += '<div class="pt-pane pt-active" data-pane="unified">' +
+    // Jeyson stopped using it; display:none keeps it one attribute from return.
+    html += '<div class="pt-pane" data-pane="unified" style="display:none;">' +
       '<div class="pt-group-title">Paste any order block</div>' +
       '<textarea class="pt-unified-input" placeholder="Paste any order block — GLP-1 calculator, Template Menu (Pharmacy J / Pharmacy A / Greenwich), or manual text. Tracking comes from the field above." ' +
       'style="width:100%;box-sizing:border-box;min-height:200px;padding:8px;font-size:12px;' +
@@ -3196,7 +3615,11 @@ Thank you!`;
     panel.querySelectorAll('.pt-item').forEach(function (el) {
       el.addEventListener('click', function () {
         let msg, label;
-        if (el.dataset.kind === 'reorder') {
+        if (el.dataset.kind === 'ldn') {
+          msg = LDN_TEMPLATES[el.dataset.var].split('{NAME}').join(firstName)
+            .split('{ADDRESS}').join(address || '[address]');
+          label = el.dataset.var;
+        } else if (el.dataset.kind === 'reorder') {
           const cfg = PEPTIDES[el.dataset.pep][el.dataset.var];
           msg = buildReorderMessage(firstName, cfg, address);
           label = cfg.vials ? cfg.nickname + ' × ' + cfg.vials : cfg.nickname;
@@ -3377,6 +3800,16 @@ Thank you!`;
     }
   }
 
-  new MutationObserver(addButton).observe(document.documentElement, { childList: true, subtree: true });
+  // v5.28.1: debounce the observer. Zoho emits mutation batches constantly on
+  // detail pages, and the raw observer ran a full documentElement scan
+  // (querySelector('crm-detailview-actions') + '.pt-btn') on EVERY batch — a
+  // steady background CPU tax. 250ms trailing: one scan per burst, invisible
+  // delay for a toolbar button.
+  let ptObsTimer = null;
+  const addButtonDebounced = () => {
+    if (ptObsTimer) return;
+    ptObsTimer = setTimeout(() => { ptObsTimer = null; addButton(); }, 250);
+  };
+  new MutationObserver(addButtonDebounced).observe(document.documentElement, { childList: true, subtree: true });
   addButton();
 })();

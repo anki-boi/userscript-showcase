@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tracking Bus (All-in-One)
 // @namespace    showcase-trackbus
-// @version      2.35
+// @version      2.41
 // @author       Jeyson Dagondon
 // @description  Fetch blank days (configurable), parse rows, auto-open UPS/FedEx, extract DS+TN
 // @match        https://docs.google.com/spreadsheets/*
@@ -19,13 +19,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TrackBus v2.35] boot');
+console.info('[TrackBus v2.41] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['TrackBus'] = {
   name: 'Tracking Bus (All-in-One)',
-  version: '2.35',
+  version: '2.41',
   state: 'idle',
   message: '',
   progress: null,
@@ -331,7 +331,8 @@ window.__scripts['TrackBus'] = {
      ============================================================ */
 
   function runController() {
-    var box, btn, driveBtn, status, resultsPanel, resultsBody;
+    var box, btn, driveBtn, status, resultsPanel, resultsBody, panel;
+    var triggerEl = null, triggerLabel = null;
     var lfFetchBtn, daysInput, lfPortalWin = null, lfCleanup = null;
     var rowStatus = [], statusCells = [], dateCells = [], openedAt = [];
     var currentDateLabel = 'Date Shipped';
@@ -747,6 +748,7 @@ window.__scripts['TrackBus'] = {
       var left = Math.max(0, resultsBody.querySelectorAll('tr').length - 1); // minus the header row
       if (left === 0) {
         resultsPanel.classList.add('collapsed');
+        resultsPanel.classList.remove('tb-open');
         status.textContent = '';
       } else {
         status.textContent = left + ' row(s) remaining.';
@@ -974,7 +976,10 @@ window.__scripts['TrackBus'] = {
         if (LF_PHARMACY_URL_MAP[i].key === pharmKey) { pharm = LF_PHARMACY_URL_MAP[i]; break; }
       }
       if (!pharm) { toast('Unknown pharmacy tab', false); return; }
-      if (lfCleanup) { try { lfCleanup(); } catch (e) {} lfCleanup = null; }
+      // v2.36: lfCleanup is the teardown handle for the previous run's observers
+      // and listeners. A failed cleanup leaves them attached, so the next run
+      // stacks a second set on the same nodes — that is a leak, not a no-op.
+      if (lfCleanup) { try { lfCleanup(); } catch (e) { console.warn('[TrackBus] previous LifeFile teardown failed — observers may still be attached:', e); } lfCleanup = null; }
       var b = buildLfTarget(pharmKey, days);
       var nonce = b.nonce;
       var target = b.target;
@@ -1015,7 +1020,8 @@ window.__scripts['TrackBus'] = {
     // wait for the lfx:res response, then load the clipboard + select A2 +
     // prompt the user's ONE trusted Ctrl+V.
     function waitForLfx(pharm, nonce, portalWin) {
-      if (lfCleanup) { try { lfCleanup(); } catch (e) {} lfCleanup = null; }
+      // v2.36: same teardown-leak reason as the run() site above.
+      if (lfCleanup) { try { lfCleanup(); } catch (e) { console.warn('[TrackBus] LifeFile teardown failed before the poll — observers may still be attached:', e); } lfCleanup = null; }
       var deadline = Date.now() + 180000;
       var hello = setInterval(function () {
         try { portalWin.postMessage({ type: 'lfx', nonce: nonce }, '*'); } catch (e) { console.warn('[TrackBus]', e); }
@@ -1069,15 +1075,19 @@ window.__scripts['TrackBus'] = {
       var items = parseToJSON();
       currentItems = items;
       renderTable(items);
+      // Jeyson 2026-10-02: "The results panel should only pop up after clicking
+      // 'Parse' button" — Parse is the only thing that summons the table.
+      resultsPanel.classList.add('tb-open');
       pulse(driveBtn); // v2.29: next step is Open & Extract
     }
 
     var CSS = [
       ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}',
-      '#tb-panel{position:fixed;bottom:16px;right:16px;z-index:2147483647;',
+      '#tb-panel{position:fixed;bottom:16px;right:16px;z-index:2147483647;display:none;',
       'background:var(--ds-surface,#1e1e1e);color:var(--ds-text,#eee);padding:10px;border-radius:8px;',
       'font:12px system-ui,sans-serif;width:280px;max-height:calc(100vh - 32px);overflow-y:auto;',
       'box-shadow:0 2px 8px rgba(31,45,61,.08)}',
+      '#tb-panel.tb-open{display:block}',
       '#tb-panel textarea{width:100%;height:110px;background:var(--ds-surface,#111);color:var(--ds-text,#eee);',
       'border:1px solid var(--ds-border,#444);border-radius:4px;font:11px monospace;padding:4px;',
       'box-sizing:border-box;resize:vertical}',
@@ -1093,7 +1103,9 @@ window.__scripts['TrackBus'] = {
       'background:var(--ds-surface,#1e1e1e);color:var(--ds-text,#eee);padding:10px;border-radius:8px;',
       // v2.26 (Jeyson): bigger — he works in this table now.
       'font:12px system-ui,sans-serif;width:min(1100px,calc(100vw - 40px));max-height:75vh;',
-      'box-shadow:0 2px 8px rgba(31,45,61,.08);display:flex;flex-direction:column}',
+      // v2.38: hidden until summoned (the display lives here, not in two rules)
+      'box-shadow:0 2px 8px rgba(31,45,61,.08);flex-direction:column;display:none}',
+      '#tb-results.tb-open{display:flex}',
       '#tb-results-head{display:flex;justify-content:space-between;align-items:center;',
       'margin-bottom:6px;font-weight:600;cursor:move}',
       '#tb-results-body{overflow:auto;max-height:68vh}',
@@ -1123,6 +1135,17 @@ window.__scripts['TrackBus'] = {
       '.tb-guide-ring{position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #ffb43c;border-radius:6px;animation:tbPulse 1.4s ease-in-out infinite}',
       '.tb-guide-num{position:fixed;z-index:2147483646;pointer-events:none;background:#ffb43c;color:#2b2620;font:700 11px/18px system-ui,sans-serif;',
       'width:18px;height:18px;text-align:center;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.4)}',
+      // v2.38+ (DESIGN.md § Trigger contract): the chip is a real item in the
+      // Sheets toolbar row (see buildTrigger for the measured dock and why the
+      // header row was rejected). Label collapses at Sheets' own header-wrap
+      // breakpoint (~430px); open/closed state lives in colour + title, not text.
+      '#tb-trigger{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;height:28px;',
+      'margin:6px;padding:0 10px;border:0;border-radius:6px;',
+      'background:var(--ds-accent,#8a5f2e);color:var(--ds-accent-text,#fff);',
+      'font:700 12px system-ui,sans-serif;cursor:pointer}',
+      '#tb-trigger.tb-open{background:var(--ds-danger,#b3402e)}',
+      '#tb-trigger.tb-floating{position:fixed;left:8px;top:8px;z-index:2147483647}',
+      '@media (max-width:430px){#tb-trigger .tb-trigger-label{display:none}#tb-trigger{padding:0 8px}}',
       '#tb-results.collapsed #tb-results-foot{display:none}'
     ].join('');
 
@@ -1220,14 +1243,110 @@ window.__scripts['TrackBus'] = {
       if (guideEl) hideGuide(); else showGuide();
     }
 
-    function onGuideKey(e) {
-      if (e.key === 'Escape') hideGuide();
+    /* ---- Trigger + dismissal (DESIGN.md § Trigger contract, v2.38) --------
+       Nothing is visible at boot: the panels are summoned from an inline chip
+       docked in the Sheets header and dismissed three ways (✕ / Escape /
+       click outside). Dock measured live: left:72px top:4px inside #docs-header
+       stays clear of the Sheets logo, the doc title and Share at 805→273px. */
+
+    function panelIsOpen() { return !!panel && panel.classList.contains('tb-open'); }
+    function resultsAreOpen() { return !!resultsPanel && resultsPanel.classList.contains('tb-open'); }
+
+    function renderTrigger() {
+      if (!triggerEl) return;
+      var open = panelIsOpen();
+      if (open) triggerEl.classList.add('tb-open'); else triggerEl.classList.remove('tb-open');
+      triggerEl.title = open
+        ? 'Tracking Bus is open — click again, press Escape or click outside to hide it'
+        : 'Show the Tracking Bus panel';
+    }
+
+    // Jeyson 2026-10-02: "we should also be able to close the results panel any
+    // time okie" — the results table gets the same three exits as the control
+    // panel: its own ✕, Escape, and a click anywhere outside it.
+    function closeResults() {
+      if (!resultsPanel) return;
+      resultsPanel.classList.add('collapsed');
+      resultsPanel.classList.remove('tb-open');
+    }
+
+    // Registered once at build: a click outside dismisses whatever is open.
+    function onOutsidePress(e) {
+      if (!panelIsOpen() && !resultsAreOpen()) return;
+      if (e.target && e.target.closest && e.target.closest('#tb-panel,#tb-results,#tb-trigger,#tb-guide')) return;
+      closePanel();
+      closeResults();
+    }
+
+    // Escape peels one layer: guide, then the control panel, then the results table.
+    function onPanelKey(e) {
+      if (e.key !== 'Escape') return;
+      if (guideEl) { hideGuide(); return; }
+      if (panelIsOpen()) { closePanel(); return; }
+      if (resultsAreOpen()) closeResults();
+    }
+
+    function openPanel() {
+      if (!panel) return;
+      panel.classList.add('tb-open');
+      renderTrigger();
+      // v2.29 first-run coach, moved off boot: the guide appears the first time
+      // the panel is actually opened, never as an always-on floating panel.
+      try { if (!localStorage.getItem('tb_guide_seen')) showGuide(); } catch (err) { console.warn('[TrackBus]', err); }
+    }
+
+    function closePanel() {
+      if (!panel) return;
+      panel.classList.remove('tb-open');
+      renderTrigger();
+    }
+
+    function buildTrigger() {
+      if (!triggerEl) {
+        triggerEl = document.createElement('button');
+        triggerEl.id = 'tb-trigger';
+        var glyph = document.createElement('span');
+        glyph.textContent = '🚌';
+        triggerLabel = document.createElement('span');
+        triggerLabel.className = 'tb-trigger-label';
+        triggerLabel.textContent = 'Tracking Bus';
+        triggerEl.appendChild(glyph);
+        triggerEl.appendChild(triggerLabel);
+        triggerEl.onclick = function () { if (panelIsOpen()) closePanel(); else openPanel(); };
+      }
+      // Dock = the Sheets toolbar row, as a real item in it (measured live:
+      // 30,69 at 886/473/300px, clear of the doc title by 23-35px and clear of
+      // the Sheets logo). The header row was rejected: an absolutely positioned
+      // chip there sits directly above the doc title, and the Sheets title is
+      // click-to-rename (Jeyson 2026-10-02: "if we misclick I just might
+      // unintentionally rename the sheet accidentally").
+      var host = document.querySelector('#docs-primary-toolbars') ||
+                 document.querySelector('#docs-toolbar-wrapper');
+      if (host) {
+        if (triggerEl.parentElement !== host) host.insertBefore(triggerEl, host.firstChild);
+        triggerEl.classList.remove('tb-floating');
+      } else if (triggerEl.parentElement !== document.documentElement) {
+        // Floating fallback only while the host chrome is absent — and it re-docks
+        // as soon as the toolbar appears (watchTrigger).
+        document.documentElement.appendChild(triggerEl);
+        triggerEl.classList.add('tb-floating');
+      }
+      renderTrigger();
+    }
+
+    // Sheets re-renders its own header (rename, collab state, permission badges).
+    // Re-dock instead of assuming the chip survives (Template Menu watchFAB model).
+    function watchTrigger() {
+      setInterval(function () {
+        if (!triggerEl) return;
+        if (!triggerEl.isConnected || (triggerEl.classList.contains('tb-floating') && document.querySelector('#docs-primary-toolbars'))) buildTrigger();
+      }, 1500);
     }
 
     function build() {
       GM_addStyle(CSS);
 
-      var panel = document.createElement('div');
+      panel = document.createElement('div');
       panel.id = 'tb-panel';
 
       // v2.23 (Jeyson): no collapse toggle needed — the panels are draggable.
@@ -1329,6 +1448,13 @@ window.__scripts['TrackBus'] = {
       guideBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
       guideBtn.onclick = toggleGuide;
       panelHead.appendChild(guideBtn);
+      var pClose = document.createElement('button');
+      pClose.textContent = '✕';
+      pClose.title = 'Hide the panel (Escape or a click outside work too)';
+      pClose.style.cssText = 'width:auto;margin:0 0 0 6px;padding:0 8px;font-weight:700;background:rgba(255,255,255,0.14);border-radius:4px;cursor:pointer;border:0;color:var(--ds-text,#eee);font-size:12px;line-height:18px';
+      pClose.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      pClose.onclick = closePanel;
+      panelHead.appendChild(pClose);
       makeDraggable(panel, panelHead, 'tb_panel_pos');
       panel.insertBefore(panelHead, panel.firstChild);
       panel.appendChild(status);
@@ -1351,6 +1477,13 @@ window.__scripts['TrackBus'] = {
       rGuide.addEventListener('mousedown', function (e) { e.stopPropagation(); });
       rGuide.onclick = toggleGuide;
       rHead.appendChild(rGuide);
+      var rClose = document.createElement('button');
+      rClose.textContent = '✕';
+      rClose.title = 'Close the results table (Escape works too)';
+      rClose.style.cssText = 'width:auto;margin:0 0 0 6px;padding:0 8px;font-weight:700;background:rgba(255,255,255,0.14);border-radius:4px;cursor:pointer;border:0;color:var(--ds-text,#eee);font-size:12px;line-height:18px';
+      rClose.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      rClose.onclick = closeResults;
+      rHead.appendChild(rClose);
       makeDraggable(resultsPanel, rH1, 'tb_results_pos');
       resultsBody = document.createElement('div');
       resultsBody.id = 'tb-results-body';
@@ -1365,13 +1498,14 @@ window.__scripts['TrackBus'] = {
 
       document.documentElement.appendChild(resultsPanel);
       document.documentElement.appendChild(panel);
-      LOG('panel mounted');
-      // v2.29: first-run coach — show the guide once so the hover/click
-      // targets are obvious from the start (then only via the ? button).
-      try {
-        if (!localStorage.getItem('tb_guide_seen')) showGuide();
-      } catch (e) { console.warn('[TrackBus]', e); }
-      document.addEventListener('keydown', onGuideKey);
+      // DESIGN.md Trigger contract: both panels mount HIDDEN and are summoned
+      // from the inline chip. They are never removed — hidden DOM still answers
+      // the agent API and the extract/paste paths.
+      buildTrigger();
+      watchTrigger();
+      document.addEventListener('keydown', onPanelKey);
+      document.addEventListener('mousedown', onOutsidePress, true);
+      LOG('trigger docked; panels hidden until summoned');
     }
 
     if (document.readyState === 'loading') {
@@ -1383,6 +1517,8 @@ window.__scripts['TrackBus'] = {
     // R18: trigger dispatcher (set by runController so it has closure access)
     var api = window.__scripts['TrackBus'];
     api.trigger = function (action) {
+      if (action === 'open') { openPanel(); return { ok: true, open: panelIsOpen() }; }
+      if (action === 'close') { closePanel(); return { ok: true, open: panelIsOpen() }; }
       if (action === 'extract') {
         api.state = 'running'; api.message = 'Opening tabs & extracting...'; api.progress = null; api.lastActivity = Date.now();
         openAndExtract();
@@ -1403,10 +1539,12 @@ window.__scripts['TrackBus'] = {
     // Broad @match (specific doc-ID patterns fail to inject on Chrome 151/TM 5.5)
     // -> guard at runtime so the panel only mounts on the Patient Order Tracking
     // sheet + the sandbox test copies (16av3…, 1kFhy… — agent testing homes).
-    if (location.pathname.indexOf('1uojE2XuMYsAZ6DkFqAzt4mhBEHC7UNQrdcfUh1YnFeM') === -1 &&
-        location.pathname.indexOf('16av3HmIB5uKvVGWH120Ek76s1nEb3CpaNPRS2NOwuJI') === -1 &&
-        location.pathname.indexOf('1kFhy8dNInul7L442Fqu1gLO0L3joLymKsSMr_eu8zBc') === -1 &&
-        location.pathname.indexOf('1TCKJxeq8U6fBSP9-4jH2MmnmnHVqzy-YM5DXdzYHjdI') === -1) return;
+    // Live POTS moved to 1qP7u5… (Jeyson, 2026-10-02); the old sheet
+    // 1SHOWCAS… is retired and no longer mounts the panel.
+    if (location.pathname.indexOf('1SHOWCASE0000000000000000000000000000000000A') === -1 &&
+        location.pathname.indexOf('1SHOWCASE0000000000000000000000000000000000B') === -1 &&
+        location.pathname.indexOf('1SHOWCASE0000000000000000000000000000000000C') === -1 &&
+        location.pathname.indexOf('1SHOWCASE0000000000000000000000000000000000D') === -1) return;
     runController();
   } else if (HOST.indexOf('fedex.com') !== -1) {
     runFedEx();

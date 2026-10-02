@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GHL Conversation Context Extractor
 // @namespace    https://github.com/anki-boi/userscript-showcase
-// @version      1.8.17
+// @version      1.9.5
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  One-click GHL conversation extractor (SMS/calls/transcripts/emails) to XML/JSON
@@ -17,13 +17,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[GHL-Ctx v1.8.17] boot');
+console.info('[GHL-Ctx v1.9.5] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['GHL'] = {
   name: 'GHL Conversation Context Extractor',
-  version: '1.8.17',
+  version: '1.9.3',
   state: 'idle',
   message: '',
   progress: null,
@@ -44,13 +44,15 @@ window.__scripts['GHL'] = {
     const DEFAULT_CONFIG = {
         format: 'json',   // 'xml' or 'json'
         action: 'download',  // 'copy' or 'download'
-        files: 'download'    // 'skip' or 'download'
+        files: 'download',   // 'skip' or 'download' — download the Documents panel
+        emails: 'include'    // 'skip' or 'include' — email entries in the export
     };
 
     const CONFIG = {
         format: GM_getValue('ghl_format', DEFAULT_CONFIG.format),
         action: GM_getValue('ghl_action', DEFAULT_CONFIG.action),
-        files: GM_getValue('ghl_files', DEFAULT_CONFIG.files)
+        files: GM_getValue('ghl_files', DEFAULT_CONFIG.files),
+        emails: GM_getValue('ghl_emails', DEFAULT_CONFIG.emails)
     };
 
     function updateConfig(key, value) {
@@ -141,6 +143,36 @@ window.__scripts['GHL'] = {
         }
         #gx-extractor-toggle.gx-working:hover { background: #c0392b; }
 
+        /* Docked into GHL's own contact-detail tab row: in-flow, not a float, styled
+           like the row it sits in. The working (red Stop) state is untouched so the
+           state still reads from colour alone. */
+        #gx-extractor-container.gx-docked {
+            position: static;
+            cursor: default;
+            margin-left: 10px;
+        }
+        #gx-extractor-container.gx-docked #gx-extractor-toggle {
+            padding: 6px 12px;
+            font-size: 13px;
+            font-weight: 500;
+            background: transparent;
+            color: #6b7280;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+        }
+        #gx-extractor-container.gx-docked #gx-extractor-toggle:hover {
+            background: transparent;
+            color: #2563eb;
+            border-color: #2563eb;
+        }
+        /* Split screen: GHL's tab row is narrower than its own contents (measured:
+           row clientWidth 200 vs scrollWidth 374), so at phone/split widths the RIGHT
+           side of that row — GHL's own Customize button included — is off-screen.
+           The chip drops its label there so it survives on the glyph alone. */
+        #gx-extractor-container.gx-tight #gx-extractor-toggle .gx-toggle-label {
+            display: none;
+        }
+
         /* Settings Menu — fixed, but repositioned on open so it never leaves the viewport */
         #gx-settings-menu {
             position: fixed;
@@ -180,18 +212,27 @@ window.__scripts['GHL'] = {
         .gx-menu-label { font-weight: 500; }
         .gx-menu-value { color: #666; font-size: 12px; }
 
-        /* Depth submenu — expands in place inside the settings menu. The menu is
-           re-clamped (positionSettingsMenu) when it opens, so the extra height can
-           never push the menu off the bottom of the viewport. */
+        /* Window picker — a popup of its own, NOT a submenu: the 📋 button opens it
+           while the options menu is closed. Re-clamped by positionPopup() on open, so
+           the row list can never leave the viewport. */
         #gx-depth-menu {
+            position: fixed;
             display: none;
             flex-direction: column;
             gap: 4px;
-            padding-left: 8px;
-            margin-left: 4px;
-            border-left: 2px solid var(--ds-border,#e8e2d8);
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            color: #333;
+            min-width: 190px;
+            z-index: 100000;
         }
         #gx-depth-menu.visible { display: flex; }
+        #gx-depth-title { font-weight: 700; padding: 2px 8px 6px; color: #1b2a4a; }
 
         #gx-toast {
             position: absolute;
@@ -231,7 +272,12 @@ window.__scripts['GHL'] = {
     toggle.title = 'Extract conversation context (Drag to move · Right-click for options)';
     container.appendChild(toggle);
 
-    // Settings Menu
+    // Settings Menu — Format/Action/Attachments/Emails. The rows do NOT close the menu:
+    // setting up an export is usually more than one toggle, and closing after each one
+    // made that four right-clicks instead of one. Same as the window picker, the menu
+    // now closes only when you click the toggle again or click outside it. There is
+    // deliberately no idle auto-close either: it used to shut the menu 4 s after a
+    // right-click, mid-toggle, and the row you were reaching for was gone.
     const settingsMenu = document.createElement('div');
     settingsMenu.id = 'gx-settings-menu';
 
@@ -246,7 +292,6 @@ window.__scripts['GHL'] = {
         const newFormat = CONFIG.format === 'xml' ? 'json' : 'xml';
         updateConfig('format', newFormat);
         document.getElementById('gx-display-format').textContent = newFormat.toUpperCase();
-        closeMenu();
     };
     settingsMenu.appendChild(formatItem);
 
@@ -261,55 +306,91 @@ window.__scripts['GHL'] = {
         const newAction = CONFIG.action === 'copy' ? 'download' : 'copy';
         updateConfig('action', newAction);
         document.getElementById('gx-display-action').textContent = newAction.charAt(0).toUpperCase() + newAction.slice(1);
-        closeMenu();
     };
     settingsMenu.appendChild(actionItem);
 
-    // Files Selector
+    // Attachments Selector — whether the Documents panel is downloaded to disk.
     const filesItem = document.createElement('div');
     filesItem.className = 'gx-menu-item';
     filesItem.innerHTML = `
-        <span class="gx-menu-label">Files</span>
+        <span class="gx-menu-label">Attachments</span>
         <span class="gx-menu-value" id="gx-display-files">${CONFIG.files === 'download' ? 'Download' : 'Skip'}</span>
     `;
     filesItem.onclick = () => {
         const newFiles = CONFIG.files === 'download' ? 'skip' : 'download';
         updateConfig('files', newFiles);
         document.getElementById('gx-display-files').textContent = newFiles === 'download' ? 'Download' : 'Skip';
-        closeMenu();
     };
     settingsMenu.appendChild(filesItem);
 
-    // ── Depth Selector (v1.8.17) ──────────────────────────────────────────────
-    // Deliberately NOT stored in GM_* and deliberately given NO default: a
-    // remembered depth silently shortens a later export, which is the exact failure
-    // this picker exists to remove. Each run must be handed an explicit window, and
-    // the choice is consumed by that run (see runExtraction).
+    // Emails Selector — whether email entries are in the export at all. Skipping
+    // also skips the two email-chain expansions, so it saves time as well as output.
+    const emailsItem = document.createElement('div');
+    emailsItem.className = 'gx-menu-item';
+    emailsItem.innerHTML = `
+        <span class="gx-menu-label">Emails</span>
+        <span class="gx-menu-value" id="gx-display-emails">${CONFIG.emails === 'skip' ? 'Skip' : 'Include'}</span>
+    `;
+    emailsItem.onclick = () => {
+        const newEmails = CONFIG.emails === 'skip' ? 'include' : 'skip';
+        updateConfig('emails', newEmails);
+        document.getElementById('gx-display-emails').textContent = newEmails === 'skip' ? 'Skip' : 'Include';
+    };
+    settingsMenu.appendChild(emailsItem);
+
+    // ─── WINDOW PICKER (v1.9.0, toast-blocking fixed in v1.9.1) ──────────────
+    // The window is asked at the moment of EVERY extraction, and the answer is spent
+    // by that run. Deliberately NOT stored in GM_* and given NO default: a remembered
+    // depth silently shortens a later export, which is the exact failure this picker
+    // exists to remove. The picker is also the START BUTTON — click 📋, pick a window,
+    // the run begins — so no extraction can happen without having named a window.
     let runDepth = null;
 
-    const depthItem = document.createElement('div');
-    depthItem.className = 'gx-menu-item';
-    depthItem.innerHTML = `
-        <span class="gx-menu-label">Depth</span>
-        <span class="gx-menu-value" id="gx-display-depth">Choose…</span>
-    `;
-
-    const depthSubmenu = document.createElement('div');
-    depthSubmenu.id = 'gx-depth-menu';
-
     const DEPTH_CHOICES = [
-        { mode: 'days', value: 7, label: 'Last 7 days' },
-        { mode: 'days', value: 3, label: 'Last 3 days' },
-        { mode: 'custom',         label: 'Custom date…' },
-        { mode: 'full',           label: 'Full history' }
+        { mode: 'days', value: 3,  label: 'Last 3 days' },
+        { mode: 'days', value: 7,  label: 'Last 7 days' },
+        { mode: 'days', value: 15, label: 'Last 15 days' },
+        { mode: 'days', value: 30, label: 'Last 30 days' },
+        { mode: 'full',            label: 'Full history' },
+        { mode: 'custom',          label: 'Custom (days)…' }
     ];
+
+    const depthMenu = document.createElement('div');
+    depthMenu.id = 'gx-depth-menu';
+    const depthTitle = document.createElement('div');
+    depthTitle.id = 'gx-depth-title';
+    depthTitle.textContent = 'How far back should I read? — pick one to start';
+    depthMenu.appendChild(depthTitle);
+
+    function openDepthPicker() {
+        if (isRunning) return;
+        closeMenu();
+        // Any toast still on screen sits ABOVE the toggle (bottom: 100% + 8px), and
+        // positionPopup flips the picker above the toggle when there is no room
+        // below — so a live toast (z-index 100001 against the picker's 100000) covers
+        // the very options being asked for. Clear it. The picker's own title carries
+        // the instruction, so it needs no toast of its own either.
+        clearTimeout(toastTimer);
+        toast.className = '';
+        depthMenu.classList.add('visible');
+        positionPopup(depthMenu);
+    }
+
+    function closeDepthPicker() {
+        depthMenu.classList.remove('visible');
+    }
+
+    // A whole number of days, or null. Shared by the Custom row and the R18 trigger.
+    function parseDays(input) {
+        if (typeof input !== 'number' && typeof input !== 'string') return null;
+        const n = Number(String(input).trim());
+        return Number.isInteger(n) && n >= 1 ? n : null;
+    }
 
     function setDepth(choice) {
         runDepth = choice;
-        const display = document.getElementById('gx-display-depth');
-        if (display) display.textContent = choice.label;
-        closeMenu();
-        showToast(`Depth: ${choice.label} — click 📋 to extract`, 'success', 3000);
+        closeDepthPicker();
+        runExtraction();
     }
 
     DEPTH_CHOICES.forEach(choice => {
@@ -319,26 +400,16 @@ window.__scripts['GHL'] = {
         row.onclick = (e) => {
             e.stopPropagation();
             if (choice.mode !== 'custom') { setDepth(choice); return; }
-            const input = prompt('Extract back to (YYYY-MM-DD):', isoDay(new Date()));
+            const input = prompt('Read how many days back? (whole number)', '14');
             if (input === null) return;
-            const bound = resolveDepthBound('date', input.trim());
-            if (!bound) { showToast('✗ Not a valid date: ' + input, 'error', 4000); return; }
-            setDepth({ mode: 'date', value: isoDay(bound), label: 'Since ' + isoDay(bound) });
+            const days = parseDays(input);
+            if (days === null) { showToast('✗ Not a whole number of days: ' + input, 'error', 4000); return; }
+            setDepth({ mode: 'days', value: days, label: `Last ${days} days` });
         };
-        depthSubmenu.appendChild(row);
+        depthMenu.appendChild(row);
     });
 
-    depthItem.onclick = (e) => {
-        e.stopPropagation();
-        // The right-click menu auto-closes after 4s; a depth choice takes longer
-        // than that, so stop the clock while the submenu is open.
-        clearTimeout(menuTimeout);
-        depthSubmenu.classList.toggle('visible');
-        positionSettingsMenu();
-    };
-
-    settingsMenu.appendChild(depthItem);
-    settingsMenu.appendChild(depthSubmenu);
+    container.appendChild(depthMenu);
 
     container.appendChild(settingsMenu);
 
@@ -347,7 +418,6 @@ window.__scripts['GHL'] = {
     container.appendChild(toast);
 
     let toastTimer = null;
-    let menuTimeout = null;
     let shouldStop = false;
 
     // Keep the toast fully on-screen even when the button sits near the left edge.
@@ -407,7 +477,55 @@ window.__scripts['GHL'] = {
             }
         }
     }
-    mountFloating();
+
+    // ── DOCK: GHL's own contact-detail tab row (DESIGN.md § Trigger contract rule 1) ──
+    // That row is the flex bar holding the "Conversations" tab and the Customize button
+    // (data-pendo-id="contact-details-center-panel-customize"). Docking there puts the
+    // trigger in the same row as the panel it acts on, at the top of the screen, inside
+    // GHL's own chrome instead of floating over it.
+    const DOCK_ANCHOR = 'button[data-pendo-id="contact-details-center-panel-customize"]';
+    let docked = false;
+
+    function findDock() {
+        const customize = document.querySelector(DOCK_ANCHOR);
+        const row = customize && customize.parentElement;
+        if (!row) return null;
+        // Prove it is the tab row and not another toolbar wearing the same classes:
+        // it has to carry the Conversations tab.
+        const conv = [...row.querySelectorAll('button')].find(b => /conversations/i.test(b.innerText || ''));
+        return conv ? { row, conv } : null;
+    }
+
+    // GHL re-renders this row on every contact switch and tab switch, so the dock is
+    // re-asserted rather than done once. When the row is gone (agency pages, settings)
+    // the trigger falls back to the remembered float.
+    function keepDocked() {
+        const d = findDock();
+        if (d) {
+            container.style.left = container.style.top = container.style.right = container.style.bottom = '';
+            // LEFTMOST, not before Customize: this row overflows its own box, and the
+            // right side of it (GHL's own Customize button) is what gets clipped first.
+            if (container.parentElement !== d.row) d.row.insertBefore(container, d.row.firstChild);
+            docked = true;
+            container.classList.add('gx-docked');
+            // Room is measured from the row's left edge to the viewport edge, NOT from
+            // the chip's own width — measuring our own width here would oscillate
+            // (tight -> fits -> not tight -> clipped -> tight).
+            // ponytail: 260px is the measured point where this row stops fitting
+            // (Conversations tab 144px + chip 92px + padding). A per-row measurement is
+            // the upgrade if GHL changes the tab labels.
+            const room = window.innerWidth - d.row.getBoundingClientRect().left;
+            container.classList.toggle('gx-tight', room < 260);
+        } else {
+            docked = false;
+            container.classList.remove('gx-docked');
+            if (!container.isConnected) mountFloating();
+        }
+    }
+    keepDocked();
+    // ponytail: 1.2 s poll. Upgrade path is a MutationObserver on the detail panel if a
+    // re-render ever leaves the trigger un-docked long enough to matter.
+    setInterval(keepDocked, 1200);
 
     // Drag-to-move. Uses pointer events; right-click is left untouched so the
     // settings menu still opens. A click that ends a drag won't start extraction.
@@ -415,6 +533,7 @@ window.__scripts['GHL'] = {
     let lastDragMoved = false;
 
     function startDrag(e) {
+        if (docked) return;          // a docked trigger lives in GHL's row; it does not move
         if (e.button !== 0) return;   // only drag with the primary button
         lastDragMoved = false;
         const r = container.getBoundingClientRect();
@@ -470,10 +589,13 @@ window.__scripts['GHL'] = {
     toggle.addEventListener('pointercancel', endDrag);
 
     // ── SETTINGS MENU POSITIONING (never leaves the viewport) ──
-    function positionSettingsMenu() {
+    // Fixed popup under the toggle, flipped/clamped so it never leaves the viewport.
+    // Shared by the options menu and the window picker — one positioning rule, so the
+    // two can never drift apart.
+    function positionPopup(el) {
         const r = toggle.getBoundingClientRect();
-        const mw = settingsMenu.offsetWidth || 180;
-        const mh = settingsMenu.offsetHeight || 132;
+        const mw = el.offsetWidth || 180;
+        const mh = el.offsetHeight || 132;
         const pad = 8;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
@@ -490,25 +612,27 @@ window.__scripts['GHL'] = {
         let left = r.left;
         if (left + mw > vw - pad) left = Math.max(pad, vw - mw - pad);
 
-        settingsMenu.style.top = (top === 'auto' ? 'auto' : top + 'px');
-        settingsMenu.style.bottom = (bottom === 'auto' ? 'auto' : bottom + 'px');
-        settingsMenu.style.left = left + 'px';
-        settingsMenu.style.right = 'auto';
+        el.style.top = (top === 'auto' ? 'auto' : top + 'px');
+        el.style.bottom = (bottom === 'auto' ? 'auto' : bottom + 'px');
+        el.style.left = left + 'px';
+        el.style.right = 'auto';
     }
 
+    function positionSettingsMenu() { positionPopup(settingsMenu); }
+
     function showMenu() {
+        closeDepthPicker();
         settingsMenu.classList.add('visible');
         positionSettingsMenu();
-        clearTimeout(menuTimeout);
     }
 
     function closeMenu() {
         settingsMenu.classList.remove('visible');
-        depthSubmenu.classList.remove('visible');
     }
 
     window.addEventListener('resize', () => {
         if (settingsMenu.classList.contains('visible')) positionSettingsMenu();
+        if (depthMenu.classList.contains('visible')) positionPopup(depthMenu);
         if (toast.classList.contains('gx-show')) clampToastToViewport();
     });
 
@@ -538,16 +662,24 @@ window.__scripts['GHL'] = {
         }
     });
 
-    // Right click to open menu
+    // Right click to open menu. No auto-close timer: toggling an option must not race
+    // a countdown (see the note above settingsMenu).
     toggle.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         showMenu();
-        menuTimeout = setTimeout(closeMenu, 4000);
     });
 
-    // Close menu if clicking outside
+    // Close the menu and the window picker if clicking outside
     document.addEventListener('click', (e) => {
-        if (!container.contains(e.target)) closeMenu();
+        if (!container.contains(e.target)) { closeMenu(); closeDepthPicker(); }
+    });
+
+    // DESIGN.md § Trigger contract rule 2 — a summoned popup needs three exits. These
+    // two had their own trigger and the click-outside above; Escape was the missing
+    // one. It closes whichever is open (the picker and the options menu are never
+    // open at the same time by design).
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { closeMenu(); closeDepthPicker(); }
     });
 
     // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -676,12 +808,6 @@ window.__scripts['GHL'] = {
             const n = Number(value);
             if (!Number.isFinite(n)) return null;
             return new Date(now.getFullYear(), now.getMonth(), now.getDate() - n);
-        }
-        if (mode === 'date') {
-            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
-            if (!m) return null;
-            const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
-            return validDateParts(year, month, day) ? new Date(year, month - 1, day) : null;
         }
         return null;
     }
@@ -866,7 +992,10 @@ window.__scripts['GHL'] = {
             const pills = [...document.querySelectorAll('.message-item[data-message-id] [id^="conv-mail-thread-count-button"]')]
                 .filter(p => p.offsetParent !== null);
             if (!pills.length) break;
-            pills.forEach(p => { try { p.click(); } catch (e) {} });
+            // v1.9.3: a failed click means that email chain never expands, so its
+            // lines are silently missing from the transcript the user then reads.
+            // Say which one failed instead of swallowing it.
+            pills.forEach(p => { try { p.click(); } catch (e) { console.warn('[GHL-Ctx] email-chain pill click failed — that chain may be missing from the transcript:', e, p); } });
             clicks += pills.length;
             await sleep(3000);
             if (shouldStop) break;
@@ -1084,8 +1213,12 @@ window.__scripts['GHL'] = {
             if (shouldStop) return;
             if (isLoadingMore(sc)) await sleep(200);
             if (shouldStop) return;
-            await expandEmailChains();
-            await expandEmailCardBodies();
+            // Emails off: skip both expansions — they exist only to give email
+            // entries their bodies, and nothing else in this run reads them.
+            if (CONFIG.emails !== 'skip') {
+                await expandEmailChains();
+                await expandEmailCardBodies();
+            }
             if (shouldStop) return;
             transcriptsOpened += await expandAndLoadVisibleTranscripts();
             harvestVisible();
@@ -1641,11 +1774,11 @@ window.__scripts['GHL'] = {
     async function runExtraction() {
         if (isRunning) return;
 
-        // No window chosen -> no run. An unannounced bound is indistinguishable from
-        // a silent truncation, so the choice is mandatory and per-run.
+        // No window chosen -> ask for one instead of running. An unannounced bound is
+        // indistinguishable from a silent truncation, so the choice is mandatory and
+        // per-run; the picker is the only way in, and it also starts the run.
         if (!runDepth) {
-            showMenu();
-            showToast('⚠ Choose a depth first → menu → Depth', 'error', 5000);
+            openDepthPicker();
             return;
         }
         const depthBound = resolveDepthBound(runDepth.mode, runDepth.value);
@@ -1690,7 +1823,10 @@ window.__scripts['GHL'] = {
             }
 
             showToast('Building output...', 'success', 60000);
-            const entries = result.entries;
+            // Emails off: drop the email entries the harvest already collected.
+            const entries = CONFIG.emails === 'skip'
+                ? result.entries.filter(e => !e.data || e.data.type !== 'email')
+                : result.entries;
             const contactName = getContactName();
 
             // What the run actually walked, recorded on the export itself so a short
@@ -1775,7 +1911,7 @@ window.__scripts['GHL'] = {
 
             const actionText = CONFIG.action === 'copy' ? 'Copied' : 'Downloaded';
             let diagMsg = `✓ ${actionText} — Msgs: ${counts.message || 0} · Calls: ${counts.call || 0} ` +
-                `(${transcriptsFound} transcripts) · Emails: ${counts.email || 0} · ` +
+                `(${transcriptsFound} transcripts) · Emails: ${CONFIG.emails === 'skip' ? 'skipped' : (counts.email || 0)} · ` +
                 `Events: ${counts.event || 0} · Total: ${entries.length}`;
 
             if (emptyTranscripts > 0) {
@@ -1832,16 +1968,27 @@ window.__scripts['GHL'] = {
             shouldStop = false;
             // Consumed by the run: the next extraction is asked for its window again.
             runDepth = null;
-            const depthDisplay = document.getElementById('gx-display-depth');
-            if (depthDisplay) depthDisplay.textContent = 'Choose…';
         }
     }
 
-    // R18: trigger dispatcher
+    // R18: trigger dispatcher.
+    // 'extract' REQUIRES a window: there is no stored depth and no default, so the
+    // programmatic form must name its own — trigger('extract', { days: 7 }) or
+    // trigger('extract', { full: true }). Without one, the picker opens for a human
+    // and the caller is told the run did NOT start.
     const api = window.__scripts['GHL'];
-    api.trigger = function (action) {
+    api.trigger = function (action, opts) {
       if (action === 'extract') {
         if (api.state === 'running') return { ok: false, error: 'already running' };
+        const days = parseDays(opts && opts.days);
+        if (opts && opts.full) {
+            runDepth = { mode: 'full', label: 'Full history' };
+        } else if (days !== null) {
+            runDepth = { mode: 'days', value: days, label: `Last ${days} days` };
+        } else {
+            openDepthPicker();
+            return { ok: false, error: "window required — trigger('extract', {days:N}) or {full:true}" };
+        }
         runExtraction();
         return { ok: true };
       }

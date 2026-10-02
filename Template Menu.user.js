@@ -1,9 +1,17 @@
 // ==UserScript==
 // @name         Template Menu
 // @namespace    http://tampermonkey.net/
-// @version      6.23
+// @version      6.33
 // @description  Cascading template quick-insert menu: live preview, search, recent tracking
 // @author       Jeyson Dagondon
+// FROZEN GOLDEN REFERENCE (2026-09-27) — do not reinstall, do not maintain.
+//   The unified menu now vendors its chrome from src/zoho/unified-menu/chrome.js
+//   (SPEC Wave 6), so this file is no longer a build dependency. It stays in the
+//   repo because the golden gate needs the ORIGINAL literals to diff rendered text
+//   against, and harvest/extract.js re-reads them to audit the bank. Its own v6.33
+//   fixes live in the vendored chrome; this file keeps them only as provenance.
+//   It still carries the sandboxed-window __scripts limitation the unified script
+//   documents in chrome.js — harmless, because it is never installed.
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
 // @match        https://crm.zoho.com/crm/*/tab/CustomModule27/*
 // @match        https://crm.zoho.com/crm/*/tab/Tasks/*
@@ -14,16 +22,47 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
-// @all_frames   true
+// v6.33: @all_frames REMOVED. init() and createSearchBox() both bailed on
+//   `window !== window.top`, so every iframe copy of this script did nothing
+//   except parse the 170KB tree literal, deep-clone it, and park three
+//   document-wide MutationObservers. Top-frame-only is what the code already
+//   did; now it is also what Tampermonkey injects.
 // ==/UserScript==
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[TMenu v6.23] boot');
+console.info('[TMenu v6.33] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['TMenu'] = { name: 'Template Menu', version: '6.23', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['TMenu'] = { name: 'Template Menu', version: '6.33', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+// v6.33 (2026-09-27) — IDLE COST, not behavior. Zoho detail pages emit mutation
+//   batches constantly and the tab count is high, so the tax was:
+//   - top-frame gate + @all_frames removed (iframes built the whole tree for nothing)
+//   - rebuildTemplates() no longer deep-clones the tree when there are no overrides
+//   - isRecentPath(): one cached GM read instead of one per leaf rendered
+//   - the search index stores lowercase label/text once instead of lower-casing
+//     every leaf's whole block on every keystroke (~1 MB of churn per keystroke)
+//   - search input re-renders at most once per frame, and not at all when the
+//     trimmed query did not change
+//   - the FAB and anchor observers are debounced (250ms trailing) and their idle
+//     path is an O(1) isConnected / URL check instead of document-wide selectors
+//     (the anchor one also bails on non-anchor pages, where there is no field)
+//   - mouseover/mousedown document listeners exist only while the menu is open
+//   - createSearchBox() no longer stacks a resize listener every time it rebuilds
+//   Menu behavior, DOM, and every template string are unchanged.
+// v6.32 (2026-09-25) — the Pharmacy K branch's order blocks DROP the "Order #"
+//   placeholder line (Jeyson). It was dead weight: the order number is typed
+//   into the Zoho order, and no parser reads the line (RxSMS keys off
+//   "Products Ordered:" + "Medication:"). Template text only — every drug,
+//   dose, frequency and duration line is byte-identical to v6.31.
+// v6.31 (2026-09-25) — Pharmacy L MOTS-C + NAD+ (both in the Pharmacy L branch only):
+//   - "[BLRX] MOTS-C injectable (20 mg/mL)" DELETED (Pharmacy L retired the
+//     concentration) and the surviving 10 mg/mL product renamed
+//     "[BLRX] MOTS-C injectable" — 2 vials = 2.5 months, 4 vials = 5 months.
+//   - "[BLRX] NAD+ injectable" is 200 mg/mL in a 5 mL vial at 40 units
+//     (0.4 mL = 80 mg): same 80 mg dose, same 1000 mg per vial, so the
+//     1/2/3 Month tiers are unchanged. Pharmacy A + Greenwich NAD+ stay 100 mg/mL.
 
 // The Claude prompt used to audit/rebalance peptide stack order templates is
 // maintained outside this repo (not part of this script).
@@ -31,6 +70,12 @@ window.__scripts['TMenu'] = { name: 'Template Menu', version: '6.23', state: 'id
 (function () {
   'use strict';
   try {
+  // v6.33 perf: one frame, one copy of this script. Everything below (the
+  // ~1,200-leaf tree literal, its override clone, the GM storage reads, the
+  // three observers, the document listeners) is top-frame work only — the
+  // entry points already refused to run in iframes; this stops them being
+  // built there at all.
+  if (window !== window.top) return;
 
 function getCurrentDate() {
   const now = new Date();
@@ -875,6 +920,20 @@ Dosing: Inject 25 units subcutaneously
 Frequency: Daily
 Estimated Duration: 12 weeks`,
       },
+      // Pharmacy C (2026-09-21): reconstituted 5mL vial at 4mg/mL = 20mg total.
+      // The clinic's 25 units is 1mg, so one vial is exactly 20 injection days
+      // (5mL / 0.25mL), then cycle off - hence ONE tier for the sheet's 1 mth.
+      "Pinealon": {
+        "1 Month / 1 vial":
+`Products Ordered:
+[date] (Pharmacy C) [initials]
+Order #
+Medication: 1 vial of 5mL Pinealon
+Concentration: 4mg/mL
+Dosing: 25 units (1mg) subcutaneously
+Frequency: Once daily for 20 days, then cycle off
+Estimated Duration: 4 weeks`,
+      },
     },
     // ================================================================
     // PHARMACY D
@@ -1218,7 +1277,6 @@ Estimated Duration: 12 weeks`,
         "1 Vial / 5mL":
 `Products Ordered:
 [date] (Pharmacy K) [initials]
-Order #
 Medication: 1 vial of 5mL Melanotan II 2mg/mL
 Dosing: 250mcg (12.5 units)
 Frequency: Daily until desired color, then 2x/week to maintain
@@ -1228,7 +1286,6 @@ Estimated Duration: Varies`,
         "1 Vial / 5mL":
 `Products Ordered:
 [date] (Pharmacy K) [initials]
-Order #
 Medication: 1 vial of 5mL DSIP 1mg/mL
 Dosing: 200mcg (20 units)
 Frequency: Daily
@@ -1238,7 +1295,6 @@ Estimated Duration: Varies`,
         "1 Vial / 5mL":
 `Products Ordered:
 [date] (Pharmacy K) [initials]
-Order #
 Medication: 1 vial of 5mL Epithalon 10mg/mL
 Dosing: 1.7mg (17 units)
 Frequency: Daily
@@ -1248,7 +1304,6 @@ Estimated Duration: 4 weeks`,
         "1 Month / 60 capsules":
 `Products Ordered:
 [date] (Pharmacy K) [initials]
-Order #
 Medication: 60 capsules Larazotide 500mcg
 Dosing: 2 capsules
 Frequency: Daily
@@ -1256,7 +1311,6 @@ Estimated Duration: 4 weeks`,
         "3 Months / 180 capsules":
 `Products Ordered:
 [date] (Pharmacy K) [initials]
-Order #
 Medication: 180 capsules Larazotide 500mcg
 Dosing: 2 capsules
 Frequency: Daily
@@ -1266,11 +1320,105 @@ Estimated Duration: 12 weeks`,
         "1 Vial / 5mL":
 `Products Ordered:
 [date] (Pharmacy K) [initials]
-Order #
 Medication: 1 vial of 5mL LL-37 5mg/mL
 Dosing: Inject daily, 1 month on, 1 month off
 Frequency: Daily
 Estimated Duration: 25 days`,
+      },
+      // Lyophilized powder: 10mg Tesa + 5mg Ipa per vial, reconstituted to 2mL
+      // with BAC water (= 5mg/2.5mg per mL). 20 units = 1mg / 0.5mg nightly
+      // Mon-Fri, so one vial lasts 10 injection days = 2 weeks: the 4/8/12-week
+      // presets are 2/4/6 vials. The Medication line says "Lyophilized" on
+      // purpose - it is what keeps the RxSMS parser on this product's own rule.
+      "Tesamorelin / Ipamorelin": {
+        "1 Month / 2 vials":
+`Products Ordered:
+[date] (Pharmacy K) [initials]
+Medication: 2 vials of 2mL Lyophilized Tesamorelin / Ipamorelin
+Concentration: 5mg / 2.5mg per mL
+Directions: Reconstitute each vial with 2 mL of bacteriostatic water
+Dosing: 20 units (0.2 mL = 1 mg Tesamorelin / 0.5 mg Ipamorelin) subcutaneously
+Frequency: Every night at bedtime, Monday through Friday
+Estimated Duration: 4 weeks`,
+        "2 Months / 4 vials":
+`Products Ordered:
+[date] (Pharmacy K) [initials]
+Medication: 4 vials of 2mL Lyophilized Tesamorelin / Ipamorelin
+Concentration: 5mg / 2.5mg per mL
+Directions: Reconstitute each vial with 2 mL of bacteriostatic water
+Dosing: 20 units (0.2 mL = 1 mg Tesamorelin / 0.5 mg Ipamorelin) subcutaneously
+Frequency: Every night at bedtime, Monday through Friday
+Estimated Duration: 8 weeks`,
+        "3 Months / 6 vials":
+`Products Ordered:
+[date] (Pharmacy K) [initials]
+Medication: 6 vials of 2mL Lyophilized Tesamorelin / Ipamorelin
+Concentration: 5mg / 2.5mg per mL
+Directions: Reconstitute each vial with 2 mL of bacteriostatic water
+Dosing: 20 units (0.2 mL = 1 mg Tesamorelin / 0.5 mg Ipamorelin) subcutaneously
+Frequency: Every night at bedtime, Monday through Friday
+Estimated Duration: 12 weeks`,
+      },
+      // Pharmacy K's GLOW + KLOW (2026-09-21; KLOW re-pinned to Jeyson's real
+      // 9/23/26 order). Dosing lines are UNITS-ONLY on purpose: the RxSMS parser
+      // passes a GIVEN mg through verbatim but only reads the FIRST value, so a
+      // spelled-out blend split would degrade to "0.6 mg". Units +
+      // Concentration let the engine compute every component (0.5/2.7/1 mg for
+      // GLOW, 0.6/0.6/0.6/2 mg for KLOW) and render the full split. GLOW is the
+      // same drug and concentration as Pharmacy A's Glow Blend (27mg/5mg/10mg per
+      // 3mL vial = 1.66mg/9mg/3.33mg per mL), once daily for 30 days. KLOW is
+      // Pharmacy K's OWN 10mL vial, NOT the Greenwich [GRE] KLOW above (that one is
+      // 3/10/3/3 mg per mL in 5mL), and runs 5 days on / 2 days off (Mon-Fri)
+      // for 14 weeks across 2 vials.
+      "GLOW": {
+        "1 Vial / 3mL":
+`Products Ordered:
+[date] (Pharmacy K) [initials]
+Medication: 1 vial of 3mL Glow Blend (BPC-157 / GHK-Cu / TB-500)
+Concentration: 1.66mg / 9mg / 3.33mg per mL
+Dosing: (30 units)
+Frequency: Daily
+Estimated Duration: 30 days`,
+      },
+      "KLOW": {
+        "2 vials / 14 weeks":
+`Products Ordered:
+[date] (Pharmacy K) [initials]
+Medication: 2 vials of 10mL KLOW (BPC-157 / GHK-Cu / TB-500 / KPV)
+Concentration: 3mg / 3mg / 3mg / 10mg per mL
+Dosing: 20 units
+Frequency: 5 days on and 2 days off (Mon-Fri)
+Estimated Duration: 14 weeks`,
+      },
+      // Pharmacy K's OWN GHK-Cu (2026-09-23, re-pinned 2026-09-24 to the vial size
+      // the pharmacy actually stocks: 25mg/mL, dispensed as 3 x 2mL vials =
+      // 6 mL total, "10 units once a day" on 5 days on / 2 days off).
+      // Pharmacy K called in the original 5mL-vial scripts: they only stock the
+      // 2mL size (50mg/2mL = 25mg/mL), so ALL THREE scripts moved 25 units ->
+      // 10 units for the SAME 2.5 mg per injection. The drug per vial is
+      // unchanged (50 mg either way) even though the CONCENTRATION doubled.
+      // Different concentration, dose and schedule from the Pharmacy A "GHK-Cu
+      // Injection" row above: Pharmacy A's 10mg/mL vial is 12 units (1.2 mg) EVERY
+      // day, Pharmacy K's is 10 units (0.10 mL = 2.5 mg) 5-on/2-off — the same
+      // 2.5 mg/day the Pharmacy L 50mg/mL rows give at 5 units. The vial split
+      // does not change the dose: 25mg/mL x 0.1 mL = 2.5 mg, and 3 x 2mL holds
+      // the same 6 mL (= 60 doses of 0.10 mL = 12 weeks of 5-on/2-off) the
+      // original 3 x 5mL held at 0.25 mL. Duration is UNCHANGED.
+      // The Medication line therefore carries an "Pharmacy K" TOKEN ("3 vials of
+      // 2mL Pharmacy K GHK-Cu"): the unified engine matches DOSE_RULES by drug
+      // name, so a bare "GHK-Cu" would resolve to the Pharmacy A daily row and the
+      // patient text would promise DAILY dosing for a 5-on/2-off schedule. A
+      // parenthetical would NOT work — coreName() strips a trailing "(...)"
+      // (that is why the Tesa/Ipamorelin row says "Lyophilized" instead).
+      "GHK-Cu": {
+        "3 vials / 90 days":
+`Products Ordered:
+[date] (Pharmacy K) [initials]
+Medication: 3 vials of 2mL Pharmacy K GHK-Cu
+Concentration: 25mg/mL
+Dosing: 10 units
+Frequency: 5 days on and 2 days off (Mon-Fri)
+Estimated Duration: 90 days`,
       },
     },
     // ================================================================
@@ -2190,9 +2338,6 @@ Frequency:`,
     //   injectable and NAD Nasal Spray (BPC-157 + Tesamorelin were v6.20).
     //   Tier labels mirror the sheet's Duration column = how long ONE vial
     //   lasts at the listed dose, so the vial count is the tier multiple.
-    //   NAD+ injectable: the sheet's "40 units (80 mg)" is a units typo —
-    //   100 mg/mL means 80 mg = 80 units, which is also what makes the
-    //   10 mL / 1000 mg vial last the sheet's 1 month (80 mg x 3 x ~4.3).
     //   v6.22 adds the Estimated Duration line every other pharmacy's
     //   peptides already carry (Pharmacy A/Pharmacy J style, in weeks) to all 18
     //   Pharmacy L tiers. Value = the tier label = total supply across the
@@ -2202,10 +2347,17 @@ Frequency:`,
     //   v6.23 (a) DROPS the pointless "Peptide" sub-branch: Pharmacy L only
     //   ever had that one subsection, so it was a pure extra click. Every
     //   Pharmacy L paste now sits directly under Pharmacy L.
-    //   (b) MOTS-C carries BOTH Pharmacy L concentrations, so each entry names
-    //   its own: (20 mg/mL) [5 mL = 100 mg, 25 units = 5 mg] and the new
-    //   (10 mg/mL) [5 mL = 50 mg, 50 units = 5 mg, so 2 vials = 10 weeks /
-    //   2.5 months and 4 vials = 20 weeks / 5 months].
+    //   v6.31 (a) MOTS-C: Pharmacy L retired the 20 mg/mL sheet option
+    //   (2026-09-25), so that product is DELETED and the surviving 10 mg/mL
+    //   vial no longer spells its concentration in the name — 5 mL = 50 mg,
+    //   50 units = 5 mg, 2 vials = 10 weeks / 2.5 months, 4 vials = 20
+    //   weeks / 5 months.
+    //   (b) NAD+ injectable moved to 200 mg/mL in a 5 mL vial: 40 units
+    //   (0.4 mL) is the same 80 mg dose the 100 mg/mL / 10 mL vial gave at
+    //   80 units, and 5 mL x 200 mg/mL = the same 1000 mg, so every tier
+    //   keeps its 1/2/3 Month supply. The old "the sheet's 40 units (80 mg)
+    //   is a units typo" note is therefore RETIRED — the sheet was right.
+    //   Pharmacy A's "NAD+ Injection" and Greenwich's NAD+ stay 100 mg/mL.
     // ================================================================
     "Pharmacy L": {
 
@@ -2284,31 +2436,7 @@ Estimated Duration: 36 weeks`,
       },
 
       // ---------------- Mitochondria / Metabolic ----------------
-      "[BLRX] MOTS-C injectable (20 mg/mL)": {
-        "2.5 Months":
-`Products Ordered:
-[date] (Pharmacy L) [initials]
-Medication: 1x5mL MOTS-C
-Concentration: 20 mg/mL
-Dosing: 25 units (0.25 mL = 5 mg) subcutaneously
-Frequency: Twice weekly, in the morning or before your workout
-Estimated Duration: 10 weeks`,
-        "5 Months":
-`Products Ordered:
-[date] (Pharmacy L) [initials]
-Medication: 2x5mL MOTS-C
-Concentration: 20 mg/mL
-Dosing: 25 units (0.25 mL = 5 mg) subcutaneously
-Frequency: Twice weekly, in the morning or before your workout
-Estimated Duration: 20 weeks`,
-      },
-      // Same peptide, Pharmacy L's OTHER concentration: a 5 mL vial at 10 mg/mL
-      // holds 50 mg, so 5 mg twice weekly (10 mg/week) = 5 weeks per vial and
-      // the sheet's own durations need DOUBLE the vials: 2 vials = 2.5 months
-      // (10 weeks), 4 vials = 5 months (20 weeks). The dose is the same 5 mg,
-      // which is 50 units (0.5 mL) here instead of the 20 mg/mL entry's 25
-      // units (0.25 mL). Jeyson 2026-09-16.
-      "[BLRX] MOTS-C injectable (10 mg/mL)": {
+      "[BLRX] MOTS-C injectable": {
         "2.5 Months":
 `Products Ordered:
 [date] (Pharmacy L) [initials]
@@ -2330,25 +2458,25 @@ Estimated Duration: 20 weeks`,
         "1 Month":
 `Products Ordered:
 [date] (Pharmacy L) [initials]
-Medication: 1x10mL NAD+
-Concentration: 100 mg/mL
-Dosing: 80 units (0.8 mL = 80 mg) subcutaneously
+Medication: 1x5mL NAD+
+Concentration: 200 mg/mL
+Dosing: 40 units (0.4 mL = 80 mg) subcutaneously
 Frequency: Three times a week
 Estimated Duration: 4 weeks`,
         "2 Months":
 `Products Ordered:
 [date] (Pharmacy L) [initials]
-Medication: 2x10mL NAD+
-Concentration: 100 mg/mL
-Dosing: 80 units (0.8 mL = 80 mg) subcutaneously
+Medication: 2x5mL NAD+
+Concentration: 200 mg/mL
+Dosing: 40 units (0.4 mL = 80 mg) subcutaneously
 Frequency: Three times a week
 Estimated Duration: 8 weeks`,
         "3 Months":
 `Products Ordered:
 [date] (Pharmacy L) [initials]
-Medication: 3x10mL NAD+
-Concentration: 100 mg/mL
-Dosing: 80 units (0.8 mL = 80 mg) subcutaneously
+Medication: 3x5mL NAD+
+Concentration: 200 mg/mL
+Dosing: 40 units (0.4 mL = 80 mg) subcutaneously
 Frequency: Three times a week
 Estimated Duration: 12 weeks`,
       },
@@ -3842,7 +3970,16 @@ GM_addStyle(`
 
   let TEMPLATES;
   let flatIndexCache = null;
-  function rebuildTemplates() { TEMPLATES = applyOverrides(DEFAULT_TEMPLATES, [], loadOverrides()); }
+  // v6.33 perf: with no local edits there is nothing to apply, so take the
+  // shared tree by reference. applyOverrides used to deep-clone all ~1,200
+  // leaves (every string, every path array) on every tab load for nothing.
+  function rebuildTemplates() {
+    const overrides = loadOverrides();
+    TEMPLATES = Object.keys(overrides).length
+      ? applyOverrides(DEFAULT_TEMPLATES, [], overrides)
+      : DEFAULT_TEMPLATES;
+    flatIndexCache = null;
+  }
   rebuildTemplates();
 
   function setTemplateOverride(path, text) {
@@ -3890,7 +4027,17 @@ GM_addStyle(`
   // SECTION 2.5: RECENT TEMPLATES
   // ============================================================
   const RECENT_LIMIT = 10;
-  function getRecentList() { return GM_getValue('recentTemplates', []); }
+  // v6.33 perf: isRecentPath() read GM storage once PER LEAF rendered, so one
+  // drill-down cost a dozen-plus synchronous storage round-trips. One cached
+  // read, invalidated whenever the list is written.
+  let recentCache = null; // { list, keys:Set }
+  function getRecentList() {
+    if (!recentCache) {
+      const list = GM_getValue('recentTemplates', []);
+      recentCache = { list, keys: new Set(list.map(r => r.pathKey)) };
+    }
+    return recentCache.list;
+  }
   function trackRecent(path, text, isTaskUpdate) {
     if (!path || !path.length) return;
     const pathKey = path.join('::');
@@ -3898,14 +4045,16 @@ GM_addStyle(`
     const recent = getRecentList().filter(r => r.pathKey !== pathKey);
     recent.unshift({ pathKey, path, label, text, isTaskUpdate });
     GM_setValue('recentTemplates', recent.slice(0, RECENT_LIMIT));
+    recentCache = null;
   }
   function isRecentPath(path) {
     if (!path || !path.length) return false;
-    const pathKey = path.join('::');
-    return getRecentList().some(r => r.pathKey === pathKey);
+    getRecentList(); // ensure the cache exists
+    return !!recentCache && recentCache.keys.has(path.join('::'));
   }
   function clearRecentHistory() {
     GM_setValue('recentTemplates', []);
+    recentCache = null;
     showToast('✅ Recent history cleared');
   }
 
@@ -3918,7 +4067,13 @@ GM_addStyle(`
       const path = pathArr.concat(key);
       const nextTaskUpdate = isTaskUpdate || key === 'Task Updates';
       if (typeof value === 'string') {
-        out.push({ path, label: path.join(' › '), text: value, isTaskUpdate: nextTaskUpdate });
+        // v6.33 perf: the lowercase forms are computed once per index build.
+        // getSearchMatches used to lower-case every leaf's label AND its whole
+        // multi-hundred-character block on every keystroke (~1 MB of string
+        // churn per keystroke) to arrive at the same answer each time.
+        out.push({ path, label: path.join(' › '), text: value,
+                   lcLabel: path.join(' › ').toLowerCase(), lcText: value.toLowerCase(),
+                   isTaskUpdate: nextTaskUpdate });
       } else {
         out = out.concat(flattenTemplates(value, path, nextTaskUpdate));
       }
@@ -3930,10 +4085,10 @@ GM_addStyle(`
     return flatIndexCache;
   }
   function getSearchMatches(query) {
-    const q = query.toLowerCase();
+    const q = query.trim().toLowerCase();
     if (!q) return [];
     return getFlatIndex()
-      .filter(entry => entry.label.toLowerCase().includes(q) || entry.text.toLowerCase().includes(q))
+      .filter(entry => entry.lcLabel.includes(q) || entry.lcText.includes(q))
       .slice(0, 60);
   }
 
@@ -3942,7 +4097,7 @@ GM_addStyle(`
   // ============================================================
   let menuRoot = null, fabEl = null, toastEl = null, toastTimer = null;
   let lastFocused = null, previewEl = null;
-  let fabWatcher = null, fabReinjectQueued = false;
+  let fabWatcher = null, fabWatcherTimer = null, fabHost = null, fabReinjectQueued = false;
   let menuStack = [], drillDownMode = false;
   let currentSearchQuery = '';
   // 'dynamic' = auto-switch at 1200 | 'drilldown' = always drill-down | 'flyout' = always flyout
@@ -3952,6 +4107,7 @@ GM_addStyle(`
   // description / CustomModule32), separate from the FAB-opened dropdown's own
   // in-menu search row.
   let searchBoxEl = null, searchInputEl = null, anchorObserver = null, widthSourceEl = null;
+  let anchorTimer = null, resizeBound = false, searchRenderFrame = null;
   let replacerRowEl = null;
   let anchorReinjectQueued = false;
   let searchBoxDriven = false; // true while the dropdown is being driven by the anchored box
@@ -4018,8 +4174,17 @@ GM_addStyle(`
     input.placeholder = '🔍 Search templates…';
     input.value = currentSearchQuery;
     input.addEventListener('input', (e) => {
-      currentSearchQuery = e.target.value.trim();
-      rerenderRootAfterSearch(e.target.selectionStart);
+      const q = e.target.value.trim();
+      const cursor = e.target.selectionStart;
+      if (q === currentSearchQuery) return; // same query, same tree — no re-render
+      currentSearchQuery = q;
+      // v6.33 perf: one re-render per frame, not one per keystroke. A fast
+      // typist used to pay a full menu teardown + rebuild per character.
+      if (searchRenderFrame) cancelAnimationFrame(searchRenderFrame);
+      searchRenderFrame = requestAnimationFrame(() => {
+        searchRenderFrame = null;
+        rerenderRootAfterSearch(cursor);
+      });
     });
     li.appendChild(input);
     return li;
@@ -4267,6 +4432,8 @@ GM_addStyle(`
     currentSearchQuery = '';
     drillDownMode = menuMode === 'drilldown' || (menuMode === 'dynamic' && window.innerWidth < 1200);
 
+    attachMenuListeners();
+
     if (drillDownMode) {
       // Drill-down: render first level, then position
       menuRoot.style.left = '0px';
@@ -4303,6 +4470,7 @@ GM_addStyle(`
   }
 
   function closeMenu() {
+    detachMenuListeners();
     hidePreview();
     menuStack = [];
     currentSearchQuery = '';
@@ -4551,6 +4719,7 @@ function handleTemplateClick(text, isTaskUpdate = false) {
     const attachToPanel = () => {
       const host = findTopPanelHost();
       if (!host) return false;
+      fabHost = host;
       host.appendChild(fabEl);
       fabEl.classList.remove('tmenu-fab-fallback');
       return true;
@@ -4583,12 +4752,21 @@ function handleTemplateClick(text, isTaskUpdate = false) {
   // Re-dock the button if Zoho re-renders the top panel and drops it from the DOM.
   function watchFAB() {
     if (fabWatcher) return;
+    // v6.33 perf: the idle path is now one O(1) `isConnected` read instead of
+    // three document-wide querySelectors per mutation batch, debounced so a
+    // Zoho re-render burst costs one check instead of dozens.
     fabWatcher = new MutationObserver(() => {
-      if (!fabEl || fabReinjectQueued) return;
-      const host = findTopPanelHost();
-      if (!host || host.contains(fabEl)) return;
-      fabReinjectQueued = true;
-      requestAnimationFrame(() => { fabReinjectQueued = false; host.appendChild(fabEl); });
+      if (fabWatcherTimer) return;
+      fabWatcherTimer = setTimeout(() => {
+        fabWatcherTimer = null;
+        if (!fabEl || fabReinjectQueued) return;
+        if (fabEl.isConnected && fabHost && fabHost.contains(fabEl)) return;
+        const host = findTopPanelHost();
+        if (!host) return;
+        fabHost = host;
+        fabReinjectQueued = true;
+        requestAnimationFrame(() => { fabReinjectQueued = false; host.appendChild(fabEl); });
+      }, 250);
     });
     fabWatcher.observe(document.body, { childList: true, subtree: true });
   }
@@ -4655,6 +4833,7 @@ function handleTemplateClick(text, isTaskUpdate = false) {
       menuRoot = document.createElement('div');
       menuRoot.id = 'tmenu-root';
       document.body.appendChild(menuRoot);
+      attachMenuListeners();
     }
     renderDrillLevel(TEMPLATES, null, false);
     positionMenuNearBox();
@@ -4723,15 +4902,30 @@ function handleTemplateClick(text, isTaskUpdate = false) {
     replacerRowEl = buildReplacerRow();
     searchBoxEl.parentNode.insertBefore(replacerRowEl, searchBoxEl.nextSibling);
     syncBoxWidth();
-    window.addEventListener('resize', syncBoxWidth);
+    // v6.33 fix: this ran once per box (re)creation, so every SPA navigation
+    // that rebuilt the box stacked another resize listener on the window.
+    if (!resizeBound) { resizeBound = true; window.addEventListener('resize', syncBoxWidth); }
 
     searchInputEl.addEventListener('focus', () => openAnchoredMenu(searchInputEl.value));
-    searchInputEl.addEventListener('input', () => openAnchoredMenu(searchInputEl.value));
+    searchInputEl.addEventListener('input', (e) => {
+      const q = (e.target.value || '').trim();
+      if (q === currentSearchQuery) return; // same query, same tree
+      openAnchoredMenu(q);
+    });
   }
 
   function watchAnchor() {
     if (anchorObserver) return;
+    // v6.33 perf: debounced, and it bails on a URL string check instead of
+    // getElementById + closest() on every mutation batch — on the Contacts tab
+    // there is no anchor field at all, so the old callback paid that cost for
+    // nothing on every single mutation Zoho emits.
     anchorObserver = new MutationObserver(() => {
+      if (anchorTimer) return;
+      anchorTimer = setTimeout(() => {
+      anchorTimer = null;
+      const u = window.location.href;
+      if (!searchBoxEl && !u.includes('/tab/Tasks/') && !u.includes('/tab/CustomModule32/')) return;
       if (anchorReinjectQueued) return;
       const fieldEl = findFieldEl();
       if (!fieldEl && searchBoxEl && document.body.contains(searchBoxEl)) {
@@ -4747,6 +4941,7 @@ function handleTemplateClick(text, isTaskUpdate = false) {
       } else {
         syncBoxWidth();
       }
+      }, 250);
     });
     anchorObserver.observe(document.body, { childList: true, subtree: true });
   }
@@ -4892,13 +5087,28 @@ function handleTemplateClick(text, isTaskUpdate = false) {
   }
 
   // Keep a single highlight: drop the keyboard highlight when the mouse takes over
-  document.addEventListener('mouseover', (e) => {
+  const onMenuMouseover = (e) => {
     if (!menuRoot || !kbEngaged) return;
     const overItem = e.target.closest && e.target.closest('.tmenu-item');
     if (overItem && menuRoot.contains(overItem) && !overItem.classList.contains('tmenu-kb-active')) {
       kbClearActive();
     }
-  }, true);
+  };
+  const onMenuMousedown = (e) => {
+    if (menuRoot && !menuRoot.contains(e.target) && e.target !== fabEl
+        && e.target !== searchInputEl && e.target !== searchBoxEl) closeMenu();
+  };
+  // v6.33 perf: both listeners used to be attached for the life of the tab and
+  // fired on every mouse event in the page while doing nothing at all unless
+  // the menu was open. They now exist only while the menu is open.
+  function attachMenuListeners() {
+    document.addEventListener('mouseover', onMenuMouseover, true);
+    document.addEventListener('mousedown', onMenuMousedown, true);
+  }
+  function detachMenuListeners() {
+    document.removeEventListener('mouseover', onMenuMouseover, true);
+    document.removeEventListener('mousedown', onMenuMousedown, true);
+  }
   // ---------- Number quick-select (power user) ----------
   let kbNumBuffer = '';
   let kbNumTimer = null;
@@ -4997,10 +5207,6 @@ function handleTemplateClick(text, isTaskUpdate = false) {
       else if (e.key === 'ArrowLeft') kbFlyoutLeft();
       else if (e.key === 'Enter') kbFlyoutEnter();
     }
-  }, true);
-  document.addEventListener('mousedown', (e) => {
-    if (menuRoot && !menuRoot.contains(e.target) && e.target !== fabEl
-        && e.target !== searchInputEl && e.target !== searchBoxEl) closeMenu();
   }, true);
   window.addEventListener('resize', () => { if (menuRoot) closeMenu(); });
 

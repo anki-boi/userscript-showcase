@@ -3,7 +3,7 @@
 // @namespace    jeyson-slack-api
 // @version      0.1.3
 // @author       Jeyson Dagondon
-// @description  Agent API for Slack (Dr. Jones): list, read, search, compose.
+// @description  Agent API for Slack (Dr. Example): list, read, search, compose.
 // @match        https://app.slack.com/client/*
 // @grant        none
 // @run-at       document-idle

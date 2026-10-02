@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EasyPost Tracking Copier
 // @namespace    userscript-showcase
-// @version      2.8
+// @version      2.9
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  Auto-copy tracking details from EasyPost tracking pages
@@ -11,13 +11,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[EasyPost v2.8] boot');
+console.info('[EasyPost v2.9] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['EasyPost'] = {
   name: 'EasyPost Tracking Copier',
-  version: '2.8',
+  version: '2.9',
   state: 'idle',
   message: '',
   output: null,
@@ -40,15 +40,37 @@ window.__scripts['EasyPost'] = {
 
     let code = raw.match(/"tracking_code":"([^"]+)"/)?.[1];
     let carrier = raw.match(/"carrier":"([^"]+)"/)?.[1];
-    let dateStr = raw.match(/"status_detail":"label_created","datetime":"([^"]+)"/)?.[1];
+
+    // v2.9: the ship date used to require the literal adjacency
+    //   "status_detail":"label_created","datetime":"…"
+    // so any package that was already in transit, out for delivery, or delivered
+    // — the normal case for anyone pasting this into a note — silently produced
+    // "Date Shipped: N/A" while still reporting a successful copy. Take the
+    // datetime that sits in the same object as the tracking_code (nearest one,
+    // either side), and fall back to the first datetime in the payload.
+    let dateStr = null;
+    const codeMatch = raw.match(/"tracking_code":"([^"]+)"/);
+    if (codeMatch) {
+      const around = raw.slice(Math.max(0, codeMatch.index - 800), codeMatch.index + 1600);
+      dateStr = (around.match(/"datetime":"([^"]+)"/) || [])[1] || null;
+    }
+    if (!dateStr) dateStr = (raw.match(/"datetime":"([^"]+)"/) || [])[1] || null;
 
     // DOM fallback (FedEx etc.)
     if (!code || !carrier) {
       const imgDiv = document.querySelector('[role="img"][aria-label]');
       if (imgDiv) carrier = carrier || imgDiv.getAttribute('aria-label');
-      const wrapper = imgDiv?.closest('._VerticalStack_ele7k_4, [class*="VerticalStack"]');
-      const numSpan = wrapper?.querySelector('span._Text_4eopp_4');
-      if (numSpan) code = code || numSpan.textContent.trim();
+      const wrapper = imgDiv?.closest('[class*="VerticalStack"], [class*="verticalStack"]');
+      // v2.9: this used to require the exact build-hashed classes
+      // `_VerticalStack_ele7k_4` / `span._Text_4eopp_4`. Those hashes rotate on
+      // every frontend build — the exact failure that took out the UPS copier on
+      // 2026-09-11 (`mb-0` -> `pr-1`) — so match on the class STEM and then on
+      // what the text actually looks like instead of on a class at all.
+      if (wrapper && !code) {
+        const spans = [...wrapper.querySelectorAll('[class*="Text"], span')];
+        const numSpan = spans.find((s) => /^[A-Z0-9]{6,}$/.test((s.textContent || '').trim()));
+        if (numSpan) code = numSpan.textContent.trim();
+      }
     }
 
     if (!code || !carrier) return null;

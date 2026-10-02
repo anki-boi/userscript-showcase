@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cross-Platform Contact Toolkit
 // @namespace    http://tampermonkey.net/
-// @version      7.30
+// @version      7.31
 // @author       Jeyson Dagondon
 // @description  Unified toolbar: copy name+link, cross-platform search, LifeFile order check
 // @match        https://app.gohighlevel.com/*
@@ -23,11 +23,11 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[Toolkit v7.30] boot');
+console.info('[Toolkit v7.31] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
-window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', version: '7.30', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
+window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', version: '7.31', state: 'idle', message: 'Loaded', output: null, error: null, lastActivity: Date.now(), trigger: null };
   const __dsStyle = document.createElement('style');
   __dsStyle.textContent = ':root{--ds-bg:#faf8f5;--ds-surface:#fffdf9;--ds-surface2:#f4f0e9;--ds-border:#e8e2d8;--ds-text:#2b2620;--ds-muted:#7a7163;--ds-accent:#8a5f2e;--ds-accent-text:#ffffff;--ds-success:#3d7a46;--ds-warn:#a16207;--ds-danger:#b3402e;--ds-info:#2c6e9c}';
   document.documentElement.appendChild(__dsStyle);
@@ -1383,7 +1383,14 @@ window.__scripts['ContactKit'] = { name: 'Cross-Platform Contact Toolkit', versi
      BOOT
      ============================================================ */
   function startObserver() {
-    const observer = new MutationObserver(() => injectBar());
+    // v7.31: debounce. RxFlow renders in async bursts; the raw observer
+    // ran injectBar() (name read + dedupe + placeholder cleanup) on every
+    // mutation batch. 150ms trailing = one pass per burst.
+    let barTimer = null;
+    const observer = new MutationObserver(() => {
+      if (barTimer) return;
+      barTimer = setTimeout(() => { barTimer = null; injectBar(); }, 150);
+    });
     observer.observe(document.body, { childList: true, subtree: true });
     try { injectBar(); } catch (e) { console.error('[xplat] injectBar failed:', e); }
   }

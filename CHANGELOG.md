@@ -210,7 +210,7 @@ counted those rows as the app's answer.
   - **A** lone surname → **no search request is sent at all**, no navigation,
     `waiting_human`.
   - **B** full name + another patient's phone → the app returns Beta's single row
-    → **refused** (`the result row is missing "emiliano"`), gated as
+    → **refused** (`the result row is missing "alpha"`), gated as
     `Open PAT123456789 · Patient Beta · DOB 1970-01-01 · 5550100002`, no profile
     opened. Under the old rule this exact input auto-opened her profile.
   - **C** the sweep keeps the unconfirmable row with its review note instead of

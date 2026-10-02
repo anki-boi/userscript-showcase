@@ -105,8 +105,8 @@ Models to copy: `RingCentral` / `Patient Connect AI Reply Assistant`
 what you mean, and its answer must be verified — never counted. Written after
 wrong-patient sends in the RxFlow Sale Automator: the Patients search is a
 fuzzy substring match, so the lone surname `Sampleperson` returned **exactly one**
-row — `PAT123456789 · Patienttwo Sampleperson` — and the old rule *"exactly one row =
-found"* opened her profile for `Patientone Sampleperson`'s order. Downstream of that
+row — `PAT123456789 · Patient Beta` — and the old rule *"exactly one row =
+found"* opened her profile for `Patient Alpha`'s order. Downstream of that
 profile sits the order and the patient SMS.
 
 This section applies to **every** script that resolves a record in a host app
@@ -174,6 +174,31 @@ Rules for the agent working in this repo, not for the scripts:
 5. **Fix the script, don't assist it.** If a manual step, a re-run, or a special
    invocation is needed to make an automation work, the script is bugged — find
    the root cause instead of routing around it.
+
+## Publishable text (Jeyson, 2026-10-02)
+
+**Every word in this repo is publishable.** `scripts/publish-mirror.js` runs
+`scripts/scrub.js` over the scripts and docs and pushes the result to a **public**
+GitHub repo. Comments, `@description` headers, changelogs and plan docs are published
+verbatim — the scrubber only rewrites what its manifest happens to match.
+
+1. **Never write a real patient identifier into publishable text** — not a name, Patient
+   ID, phone, DOB, or email. Not in a comment "as an example", not in a changelog entry
+   describing a bug, not in a harness literal. A real identifier in a comment is a real
+   identifier on the public site.
+2. **Use the fake set** so examples stay readable and the deny-list stays clean:
+   `Patient Alpha`, `Patient Beta`, `Sampleperson`, `PAT123456789`, `5550100001`…`5550100004`,
+   `1970-01-01`, `patient.alpha@example.com`.
+3. **A harness that genuinely needs a live record reads it from `_smoketest/fixtures/`**
+   (gitignored — patient data never commits) and skips the scenario with a loud note when
+   the fixture is absent. See `_smoketest/fixtures/psa-live-positive.json`.
+4. **`scripts/scrub-manifest.json` is the blocklist, not publishable text.** It keeps the
+   real values so a leak fails the build. Never "clean" it.
+5. **The scrubber is a net, not a habit.** It leaks in the ways a list always leaks: a case
+   it misses (`Dr. Example` matched, `Dr. Example` did not), a truncated prefix, and a name that
+   collides with a product (`Patienttwo` is inside the peptide `Larazotide`, so it is
+   word-boundary-scoped and deliberately kept out of the substring deny list). Fix leaks at
+   the source; treat a scrub rule as the last line, not the first.
 
 ## Reference
 

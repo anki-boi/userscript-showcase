@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GHL Conversation Context Extractor
 // @namespace    https://github.com/anki-boi/userscript-showcase
-// @version      1.9.5
+// @version      1.9.6
 // @author       Jeyson Dagondon
 // @run-at       document-idle
 // @description  One-click GHL conversation extractor (SMS/calls/transcripts/emails) to XML/JSON
@@ -17,13 +17,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[GHL-Ctx v1.9.5] boot');
+console.info('[GHL-Ctx v1.9.6] boot');
 
 // --- Script API (R18) ---
 window.__scripts = window.__scripts || {};
 window.__scripts['GHL'] = {
   name: 'GHL Conversation Context Extractor',
-  version: '1.9.3',
+  version: '1.9.6',
   state: 'idle',
   message: '',
   progress: null,
@@ -171,6 +171,24 @@ window.__scripts['GHL'] = {
            The chip drops its label there so it survives on the glyph alone. */
         #gx-extractor-container.gx-tight #gx-extractor-toggle .gx-toggle-label {
             display: none;
+        }
+
+        /* Discoverability glow (Jeyson 2026-10-02): the docked chip moves with GHL's own
+           layout — it is NOT in the same place on every load — so co-workers cannot memorise
+           where to click. A soft steady halo with a slow pulse says "here". It is off the red
+           Stop state so "running" still reads from colour alone, and it stops for users who
+           ask the OS for reduced motion. */
+        #gx-extractor-toggle {
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, .22), 0 0 14px 3px rgba(37, 99, 235, .30);
+            animation: gx-glow 2.4s ease-in-out infinite;
+        }
+        #gx-extractor-toggle.gx-working { animation: none; }
+        @keyframes gx-glow {
+            0%, 100% { box-shadow: 0 0 0 2px rgba(37, 99, 235, .22), 0 0 14px 3px rgba(37, 99, 235, .30); }
+            50%      { box-shadow: 0 0 0 3px rgba(37, 99, 235, .32), 0 0 22px 7px rgba(37, 99, 235, .46); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #gx-extractor-toggle { animation: none; }
         }
 
         /* Settings Menu — fixed, but repositioned on open so it never leaves the viewport */

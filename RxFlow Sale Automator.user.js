@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RxFlow Sale Automator
 // @namespace    jeyson-sale-automator
-// @version      2.34
+// @version      2.35
 // @author       Jeyson Dagondon
 // @description  Auto-drive RxFlow sales from CSV/JSON rows: lookup, consent, products
 // @match        https://staff.exampleclinic.com/*
@@ -11,13 +11,13 @@
 // Part of the userscript-showcase collection — generated from the private working
 // repo via scripts/scrub.js. Do not hand-edit; fix the source and regenerate.
 
-console.info('[PSA v2.34] boot');
+console.info('[PSA v2.35] boot');
 
 // --- Script API (R18) — agent-facing status/trigger/output channel ---
 window.__scripts = window.__scripts || {};
 window.__scripts['PSA'] = {
   name: 'RxFlow Sale Automator',
-  version: '2.33',
+  version: '2.35',
   state: 'idle',
   message: '',
   progress: null,
@@ -1697,8 +1697,8 @@ window.__scripts['PSA'] = {
     // ── PSA PATIENT IDENTITY (v2.30) ──────────────────────────────────────────
     // Pure functions: no DOM, no globals. They exist because the Patients search
     // is a FUZZY SUBSTRING search and its row count is NOT an answer. On the real
-    // 2026-10-02 queue, "Patientone Sampleperson" returned 0 rows while the lone
-    // surname "Sampleperson" returned exactly ONE row — "Patienttwo Sampleperson" — and the
+    // 2026-10-02 queue, "Patient Alpha" returned 0 rows while the lone
+    // surname "Sampleperson" returned exactly ONE row — "Patient Beta" — and the
     // old rule "exactly one row = found" opened her profile for his order.
     // Identity is decided here, never by a row count.
     // Harness: _smoketest/verify-psa-lookup.js (live probe: probe-psa-lookup.mjs)
@@ -1711,8 +1711,8 @@ window.__scripts['PSA'] = {
     }
 
     // A name verifies only on an EXACT token-set match against a full
-    // first+last name. A missing token ("Sampleperson" vs "Patientone Sampleperson") or
-    // an extra one ("Patienttwo Sampleperson") is a different person until a human says
+    // first+last name. A missing token ("Sampleperson" vs "Patient Alpha") or
+    // an extra one ("Patient Beta") is a different person until a human says
     // otherwise — this is the check that stops the wrong-patient send.
     function psaNameVerdict(resultName, expectedName) {
         const want = psaNameTokens(expectedName);
@@ -1741,7 +1741,7 @@ window.__scripts['PSA'] = {
     }
 
     // A rendered result row reads
-    //   "PAT123456789 Patienttwo Sampleperson 1970-01-01 0000000000 Action View Patient"
+    //   "PAT123456789 Patient Beta 1970-01-01 5550100002 Action View Patient"
     // The action buttons' text must never leak into the name.
     function psaParseSearchRowText(text) {
         const t = psaCleanIdentifier(text);
@@ -1756,7 +1756,7 @@ window.__scripts['PSA'] = {
 
     // What we may search by, strongest first. Email is deliberately ABSENT: the
     // Patients search ignores it (proved live 2026-10-02 —
-    // "patient@example.com" returns 0 rows), so searching it can only
+    // "patient.alpha@example.com" returns 0 rows), so searching it can only
     // manufacture a false "no profile" that deletes a real patient's row. A name
     // needs two tokens; a lone surname or first name is never searched.
     function psaCandidateList(row) {
@@ -1993,7 +1993,7 @@ window.__scripts['PSA'] = {
         // v2.28 — ONE lookup, verified at every step. The old loop accepted the
         // first non-empty row list as proof of identity ("exactly one row =
         // found"), which on this fuzzy substring search meant a lone surname
-        // ("Sampleperson") auto-opened a stranger's profile ("Patienttwo Sampleperson").
+        // ("Sampleperson") auto-opened a stranger's profile ("Patient Beta").
         const lookup = await lookupPatientRow(row, (m) => setStatus(panel.status, `Searching: ${m}`));
         trace("stepSearch verdict", lookup.status, lookup.foundBy || "", lookup.reason || lookup.message || "");
 

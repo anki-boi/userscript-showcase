@@ -1697,8 +1697,8 @@ window.__scripts['PSA'] = {
     // ── PSA PATIENT IDENTITY (v2.30) ──────────────────────────────────────────
     // Pure functions: no DOM, no globals. They exist because the Patients search
     // is a FUZZY SUBSTRING search and its row count is NOT an answer. On the real
-    // 2026-10-02 queue, "Emiliano Sampleperson" returned 0 rows while the lone
-    // surname "Sampleperson" returned exactly ONE row — "Lara Sampleperson" — and the
+    // 2026-10-02 queue, "Patientone Sampleperson" returned 0 rows while the lone
+    // surname "Sampleperson" returned exactly ONE row — "Patienttwo Sampleperson" — and the
     // old rule "exactly one row = found" opened her profile for his order.
     // Identity is decided here, never by a row count.
     // Harness: _smoketest/verify-psa-lookup.js (live probe: probe-psa-lookup.mjs)
@@ -1711,8 +1711,8 @@ window.__scripts['PSA'] = {
     }
 
     // A name verifies only on an EXACT token-set match against a full
-    // first+last name. A missing token ("Sampleperson" vs "Emiliano Sampleperson") or
-    // an extra one ("Lara Sampleperson") is a different person until a human says
+    // first+last name. A missing token ("Sampleperson" vs "Patientone Sampleperson") or
+    // an extra one ("Patienttwo Sampleperson") is a different person until a human says
     // otherwise — this is the check that stops the wrong-patient send.
     function psaNameVerdict(resultName, expectedName) {
         const want = psaNameTokens(expectedName);
@@ -1741,7 +1741,7 @@ window.__scripts['PSA'] = {
     }
 
     // A rendered result row reads
-    //   "PAT123456789 Lara Sampleperson 1970-01-01 0000000000 Action View Patient"
+    //   "PAT123456789 Patienttwo Sampleperson 1970-01-01 0000000000 Action View Patient"
     // The action buttons' text must never leak into the name.
     function psaParseSearchRowText(text) {
         const t = psaCleanIdentifier(text);
@@ -1993,7 +1993,7 @@ window.__scripts['PSA'] = {
         // v2.28 — ONE lookup, verified at every step. The old loop accepted the
         // first non-empty row list as proof of identity ("exactly one row =
         // found"), which on this fuzzy substring search meant a lone surname
-        // ("Sampleperson") auto-opened a stranger's profile ("Lara Sampleperson").
+        // ("Sampleperson") auto-opened a stranger's profile ("Patienttwo Sampleperson").
         const lookup = await lookupPatientRow(row, (m) => setStatus(panel.status, `Searching: ${m}`));
         trace("stepSearch verdict", lookup.status, lookup.foundBy || "", lookup.reason || lookup.message || "");
 

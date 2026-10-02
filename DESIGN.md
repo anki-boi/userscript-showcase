@@ -105,8 +105,8 @@ Models to copy: `RingCentral` / `Patient Connect AI Reply Assistant`
 what you mean, and its answer must be verified — never counted. Written after
 wrong-patient sends in the RxFlow Sale Automator: the Patients search is a
 fuzzy substring match, so the lone surname `Sampleperson` returned **exactly one**
-row — `PAT123456789 · Lara Sampleperson` — and the old rule *"exactly one row =
-found"* opened her profile for `Emiliano Sampleperson`'s order. Downstream of that
+row — `PAT123456789 · Patienttwo Sampleperson` — and the old rule *"exactly one row =
+found"* opened her profile for `Patientone Sampleperson`'s order. Downstream of that
 profile sits the order and the patient SMS.
 
 This section applies to **every** script that resolves a record in a host app

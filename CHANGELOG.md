@@ -117,7 +117,7 @@ still remove the row"*).
   refused and offered as a click-to-confirm button. Only the sweep's queue action
   changed.
 - Live: `_smoketest/verify-psa-lookup-live.mjs` **27/27 PASS** — C (a row the
-  search could not match) and E (the real `Emiliano Sampleperson` sheet row) now both
+  search could not match) and E (the real `Patientone Sampleperson` sheet row) now both
   assert the row is **removed**.
 
 ---
@@ -135,23 +135,23 @@ order to make the sweep reliably latch on to the search function there"*).
 
 ### The bug, reproduced on the real queue
 
-The `Current Orders` sheet row `Emiliano Sampleperson` (no RxFlow Patient ID)
+The `Current Orders` sheet row `Patientone Sampleperson` (no RxFlow Patient ID)
 was looked up through the Patients search. Measured live
 (`_smoketest/probe-psa-lookup.mjs`):
 
 | query | rows | what came back |
 |---|---|---|
-| `PAT123456789` | 1 | Lara Sampleperson — an exact ID hit |
-| `Emiliano Sampleperson` | 0 | no profile (he is pending intake) |
-| **`Sampleperson`** | **1** | **PAT123456789 · Lara Sampleperson · 1970-01-01** — a different patient |
-| `Emiliano` | 0 | — |
+| `PAT123456789` | 1 | Patienttwo Sampleperson — an exact ID hit |
+| `Patientone Sampleperson` | 0 | no profile (he is pending intake) |
+| **`Sampleperson`** | **1** | **PAT123456789 · Patienttwo Sampleperson · 1970-01-01** — a different patient |
+| `Patientone` | 0 | — |
 | `patient@example.com` | 0 | **the search ignores email entirely** |
-| `0000000000` (Lara's own number) | 1 | Lara Sampleperson |
+| `0000000000` (Patienttwo's own number) | 1 | Patienttwo Sampleperson |
 
 The app's search is a **fuzzy substring** match, so a lone first or last name can
 return exactly one stranger. The old rule was *"exactly one row = found"*, and its
 only sanity check (`rowLooksLikePatient`) passed when **any** name token appeared
-*anywhere* in the row text — so `Sampleperson` was "verified" by `Lara Sampleperson`,
+*anywhere* in the row text — so `Sampleperson` was "verified" by `Patienttwo Sampleperson`,
 and her profile was opened for his order. Downstream of that profile sits the
 sale and the SMS.
 
@@ -178,7 +178,7 @@ counted those rows as the app's answer.
   (`PAT id · name · DOB · phone`, action-button text stripped) and verified:
   - `psaNameVerdict` requires an **exact token-set match** against a **full
     first+last** expected name. A missing token (`Sampleperson`) **or** an extra one
-    (`Lara` / a middle initial) is a different person until a human says otherwise.
+    (`Patienttwo` / a middle initial) is a different person until a human says otherwise.
   - `psaPhoneVerdict` matches the last 10 digits (country code and punctuation
     are free).
   - `psaVerifyCandidate`: an ID hit must match the ID **and** the name; a phone
@@ -202,16 +202,16 @@ counted those rows as the app's answer.
 
 ### Verification
 
-- `_smoketest/verify-psa-lookup.js` — 51 offline assertions (the Sampleperson/Lara
+- `_smoketest/verify-psa-lookup.js` — 51 offline assertions (the Sampleperson/Patienttwo
   regression, name/phone/row parsing, candidate refusal, decision rules).
 - `_smoketest/probe-psa-lookup.mjs` — the live probe used to find the bug.
 - `_smoketest/verify-psa-lookup-live.mjs` — **24/24 PASS** against the real site,
   driving the deployed script through its own API on a fresh dashboard tab:
   - **A** lone surname → **no search request is sent at all**, no navigation,
     `waiting_human`.
-  - **B** full name + another patient's phone → the app returns Lara's single row
+  - **B** full name + another patient's phone → the app returns Patienttwo's single row
     → **refused** (`the result row is missing "emiliano"`), gated as
-    `Open PAT123456789 · Lara Sampleperson · DOB 1970-01-01 · 0000000000`, no profile
+    `Open PAT123456789 · Patienttwo Sampleperson · DOB 1970-01-01 · 0000000000`, no profile
     opened. Under the old rule this exact input auto-opened her profile.
   - **C** the sweep keeps the unconfirmable row with its review note instead of
     deleting it.
@@ -220,7 +220,7 @@ counted those rows as the app's answer.
 
 **Consequence:** a row that is not confirmed is **removed** from the queue —
 whether the search found nothing (`not-found`) or found someone who is not this
-patient (`ambiguous`, v2.31). `Emiliano Sampleperson` (pending intake, no profile) is
+patient (`ambiguous`, v2.31). `Patientone Sampleperson` (pending intake, no profile) is
 such a row. Rows are kept only when the check itself never ran.
 
 ---

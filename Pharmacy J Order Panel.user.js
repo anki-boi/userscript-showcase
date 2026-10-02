@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pharmacy J Order Panel
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @author       Jeyson Dagondon
 // @description  Fill the Pharmacy J Ultimate Template PDF from the unified menu's cart
 // @match        https://crm.zoho.com/crm/*/tab/Contacts/*
@@ -15,7 +15,14 @@
 (function () {
   'use strict';
 
-  console.info('[Pharmacy J Order Panel v1.5] boot');
+  console.info('[Pharmacy J Order Panel v1.6] boot');
+
+  // v1.6 CHANGES (2026-10-02):
+  //  - .sop-panel is now box-sizing:border-box. It declared width:420px + padding:12px + a
+  //    1px border in the DEFAULT content box, so the rendered panel was 446px wide, and the
+  //    split-screen cap max-width:calc(100vw - 48px) capped the CONTENT, not the panel — at
+  //    the narrow extreme it hung 2px off the viewport. Found by the live harness measuring
+  //    446px against a 420px assert.
 
   // The cart is NOT built here. The unified menu's Pharmacy J leaves carry a 🧾 button that stacks
   // {group, optionLabel} onto the page window — one product picker, the one Jeyson already uses.
@@ -110,7 +117,7 @@
 
   const style = document.createElement('style');
   style.textContent = `
-.sop-panel{position:fixed;top:120px;right:24px;z-index:2147483647;width:420px;max-width:calc(100vw - 48px);background:#fff;border:1px solid #c9d2e0;border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:12px;font:13px/1.45 system-ui,sans-serif;color:#1c2733}
+.sop-panel{box-sizing:border-box;position:fixed;top:120px;right:24px;z-index:2147483647;width:420px;max-width:calc(100vw - 48px);background:#fff;border:1px solid #c9d2e0;border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:12px;font:13px/1.45 system-ui,sans-serif;color:#1c2733}
 .sop-head{font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between}
 .sop-row{display:flex;gap:6px;align-items:center;margin-bottom:5px;border-bottom:1px solid #eef2f7;padding:4px 0}
 .sop-group{font-weight:600;min-width:120px}
